@@ -1,0 +1,12 @@
+From: "IT Support" <admin@paypa1-security.com>
+To: victim@yourdomain.com
+Subject: Khan cap: Tai khoan cua ban da bi khoa!
+Authentication-Results: spf=pass (sender IP is 192.168.1.5) smtp.mailfrom=paypa1-security.com; dkim=none (message not signed)
+
+Chao ban,
+Tai khoan cua ban da dang nhap tu mot thiet bi la. 
+Vui long xac minh danh tinh tai link sau de tranh bi xoa tai khoan:
+http://evil-phishing-domain.com/login
+
+Trân trong,
+IT Department
