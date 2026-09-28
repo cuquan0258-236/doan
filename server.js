@@ -30,11 +30,21 @@ app.post('/api/analyze/content', emailController.analyzeContent);
 // Endpoint truy vết URL & Redirect Chain
 app.post('/api/analyze/urls', emailController.analyzeUrls);
 
+// Endpoint phân tích file đính kèm & Cloud Sandbox
+app.post('/api/analyze/attachments', emailController.analyzeAttachments);
+
+// Endpoint làm rõ IOC bằng Threat Intelligence đa nguồn (Cache 24h)
+app.post('/api/analyze/ioc', emailController.analyzeIOC);
+
 // Inbox API — Quản lý email đã thu thập
 app.get('/api/inbox', inboxController.listEmails);
 app.get('/api/inbox/:id', inboxController.getEmailDetail);
 app.post('/api/inbox/collect', inboxController.triggerCollect);
 app.get('/api/inbox/:id/verify', inboxController.verifyIntegrity);
+
+// Bước 8: Phản ứng (Response) & Xuất Báo Cáo
+app.post('/api/response/block', emailController.executeBlockResponse);
+app.get('/api/reports/:id/html', emailController.exportReportHTML);
 
 // ========================
 // Khởi động Server
@@ -76,6 +86,10 @@ async function startServer() {
         console.log(`  POST /api/analyze/header    - Phân tích header (SPF/DKIM/DMARC/Domain Age)`);
         console.log(`  POST /api/analyze/content   - Phân tích nội dung & Social Engineering (AI Ollama)`);
         console.log(`  POST /api/analyze/urls      - Truy vết URL & Redirect Chain`);
+        console.log(`  POST /api/analyze/attachments - Phân tích file đính kèm & Cloud Sandbox`);
+        console.log(`  POST /api/analyze/ioc       - Làm rõ IOC bằng Threat Intelligence (Cache 24h)`);
+        console.log(`  POST /api/response/block   - Phản ứng & Chặn IOC (pfSense / Wazuh / Host)`);
+        console.log(`  GET  /api/reports/:id/html - Báo cáo sự cố SOC chuẩn in PDF A4`);
         console.log(`  GET  /api/inbox            - Liệt kê email đã thu thập`);
         console.log(`  GET  /api/inbox/:id        - Chi tiết email record`);
         console.log(`  POST /api/inbox/collect     - Trigger thu thập thủ công`);

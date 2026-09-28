@@ -1,11 +1,12 @@
 const EmailRecord = require('../models/EmailRecord');
 const { runCollector } = require('../workers/emailWorker');
+const ruleEngineService = require('../services/ruleEngineService');
 const crypto = require('crypto');
 const fs = require('fs');
 
 /**
  * GET /api/inbox
- * Liệt kê email đã thu thập (phân trang)
+ * Liệt kê email đã thu thập (phân trang) kèm đánh giá Rule Engine
  */
 exports.listEmails = async (req, res) => {
     try {
@@ -13,7 +14,7 @@ exports.listEmails = async (req, res) => {
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
 
-        const [emails, total] = await Promise.all([
+        const [rawEmails, total] = await Promise.all([
             EmailRecord.find()
                 .sort({ collectedAt: -1 })
                 .skip(skip)
@@ -21,6 +22,17 @@ exports.listEmails = async (req, res) => {
                 .lean(),
             EmailRecord.countDocuments()
         ]);
+
+        // Đánh giá động qua Rule Engine cho từng email
+        const emails = rawEmails.map(email => {
+            const ruleEval = ruleEngineService.evaluateEmail(email);
+            return {
+                ...email,
+                ruleEvaluation: ruleEval,
+                riskScore: ruleEval.totalScore,
+                riskLevel: ruleEval.verdict
+            };
+        });
 
         return res.status(200).json({
             status: 'success',

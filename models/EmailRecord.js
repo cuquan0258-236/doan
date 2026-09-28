@@ -58,7 +58,11 @@ const emailRecordSchema = new mongoose.Schema({
     },
     riskLevel: {
         type: String,
-        enum: ['LOW', 'MEDIUM', 'HIGH', null],
+        enum: ['MALICIOUS', 'SUSPICIOUS', 'LOW', 'CLEAN', 'INCONCLUSIVE', 'HIGH', 'MEDIUM', null],
+        default: null
+    },
+    ruleEvaluation: {
+        type: mongoose.Schema.Types.Mixed,
         default: null
     },
     contentAnalysis: {
@@ -77,7 +81,33 @@ const emailRecordSchema = new mongoose.Schema({
     urlAnalysis: {
         type: mongoose.Schema.Types.Mixed,
         default: null
-    }
+    },
+    attachmentAnalysis: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    iocAnalysis: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    overallRiskScore: {
+        type: Number,
+        default: null
+    },
+    responseActions: [{
+        target: { type: String, required: true },
+        title: { type: String },
+        action: { type: String, default: 'BLOCK' },
+        policy: { type: String },
+        iocs: [{
+            type: { type: String },
+            value: String,
+            status: String
+        }],
+        status: { type: String, default: 'SUCCESS' },
+        executedAt: { type: Date, default: Date.now },
+        details: { type: mongoose.Schema.Types.Mixed, default: {} }
+    }]
 }, {
     timestamps: true // Tự động thêm createdAt, updatedAt
 });

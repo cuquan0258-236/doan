@@ -283,7 +283,71 @@ def detect_anomalies(headers, authentication, domain_info):
             'severity': 'CRITICAL'
         })
 
+    # 8. Typosquatting / Giả mạo thương hiệu (khoảng cách Levenshtein <= 2)
+    typo_match = detect_typosquatting_brand(from_domain) or detect_typosquatting_brand(domain_info.get('sender_domain', ''))
+    if typo_match:
+        anomalies.append({
+            'type': 'TYPOSQUATTING_BRAND',
+            'detail': f"Phát hiện Typosquatting giả mạo thương hiệu '{typo_match['brand'].upper()}' qua chuỗi '{typo_match['matched_token']}' (Khoảng cách Levenshtein: {typo_match['distance']}) trong domain {typo_match['domain']}",
+            'severity': 'CRITICAL',
+            'data': typo_match
+        })
+
     return anomalies
+
+
+COMMONLY_SPOOFED_BRANDS = [
+    'paypal', 'google', 'microsoft', 'apple', 'amazon', 'netflix', 'facebook',
+    'instagram', 'chase', 'wellsfargo', 'bankofamerica', 'citibank', 'dhl',
+    'fedex', 'ups', 'adobe', 'dropbox', 'linkedin', 'twitter', 'telegram',
+    'binance', 'coinbase', 'metamask', 'vietcombank', 'techcombank', 'mbbank',
+    'bidv', 'agribank', 'tpbank', 'vpbank', 'acb', 'outlook', 'office365'
+]
+
+
+def levenshtein_distance(s1, s2):
+    """Tính khoảng cách Levenshtein giữa 2 chuỗi."""
+    s1, s2 = s1.lower(), s2.lower()
+    m, n = len(s1), len(s2)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if s1[i - 1] == s2[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]
+            else:
+                dp[i][j] = min(dp[i - 1][j - 1] + 1, dp[i][j - 1] + 1, dp[i - 1][j] + 1)
+    return dp[m][n]
+
+
+def detect_typosquatting_brand(domain):
+    """Phát hiện thương hiệu bị giả mạo với khoảng cách Levenshtein <= 2."""
+    if not domain:
+        return None
+    clean = re.sub(r':\d+$', '', domain.lower().strip())
+    parts = clean.split('.')[:-1] if '.' in clean else [clean]
+    joined_parts = '.'.join(parts)
+    tokens = set(re.split(r'[-_.]', joined_parts) + [joined_parts])
+    tokens = [t for t in tokens if len(t) >= 3]
+
+    for token in tokens:
+        for brand in COMMONLY_SPOOFED_BRANDS:
+            if token == brand:
+                continue
+            if abs(len(token) - len(brand)) > 2:
+                continue
+            dist = levenshtein_distance(token, brand)
+            if 0 < dist <= 2:
+                return {
+                    'brand': brand,
+                    'matched_token': token,
+                    'distance': dist,
+                    'domain': domain
+                }
+    return None
 
 
 def calculate_risk_score(authentication, anomalies, domain_info):
@@ -304,38 +368,52 @@ def calculate_risk_score(authentication, anomalies, domain_info):
     if dkim_status == 'fail':
         score += 25
     elif dkim_status == 'none':
-        score += 15
+        score += 5
 
     # DMARC
     dmarc_status = authentication['dmarc']['status']
     if dmarc_status == 'fail':
         score += 20
     elif dmarc_status == 'none':
-        score += 10
+        score += 15
 
-    # Domain mismatch anomalies
+    # Domain & Typosquatting anomalies
+    has_typosquat = False
+    has_domain_not_found = False
     for anomaly in anomalies:
         if anomaly['type'] == 'DOMAIN_MISMATCH':
             score += 15
         elif anomaly['type'] == 'REPLY_TO_MISMATCH':
             score += 10
         elif anomaly['type'] == 'DOMAIN_NOT_FOUND':
-            score += 40
+            score += 25
+            has_domain_not_found = True
+        elif anomaly['type'] == 'TYPOSQUATTING_BRAND':
+            score += 20
+            has_typosquat = True
 
     # Domain Age
     age = domain_info.get('domain_age_days')
+    is_new_domain = False
     if isinstance(age, int):
         if age < 7:
-            score += 50
+            score += 20
+            is_new_domain = True
         elif age < 30:
-            score += 30
+            score += 12
+            is_new_domain = True
         elif age < 90:
-            score += 10
+            score += 6
+
+    # Bonus tương quan: Typosquat + DMARC/DKIM none/fail + Domain không tồn tại hoặc mới (<30 ngày)
+    has_auth_none = (dmarc_status in ('none', 'fail') or dkim_status in ('none', 'fail'))
+    if has_typosquat and has_auth_none and (has_domain_not_found or is_new_domain):
+        score += 15
 
     # Xác định mức rủi ro
-    if score >= 61:
+    if score >= 75:
         risk_level = 'HIGH'
-    elif score >= 31:
+    elif score >= 50:
         risk_level = 'MEDIUM'
     else:
         risk_level = 'LOW'
