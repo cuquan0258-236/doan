@@ -26,11 +26,12 @@ exports.listEmails = async (req, res) => {
         // Đánh giá động qua Rule Engine cho từng email
         const emails = rawEmails.map(email => {
             const ruleEval = ruleEngineService.evaluateEmail(email);
+            const isUnanalyzed = ruleEval.verdict === 'UNANALYZED';
             return {
                 ...email,
-                ruleEvaluation: ruleEval,
-                riskScore: ruleEval.totalScore,
-                riskLevel: ruleEval.verdict
+                ruleEvaluation: isUnanalyzed ? null : ruleEval,
+                riskScore: isUnanalyzed ? null : ruleEval.totalScore,
+                riskLevel: isUnanalyzed ? null : ruleEval.verdict
             };
         });
 

@@ -31,10 +31,14 @@ except ImportError:
 
 def extract_domain(email_address):
     """Trích xuất domain từ địa chỉ email."""
+    if not email_address:
+        return None
     # Parse email address (xử lý format "Name <email@domain.com>")
     _, addr = parseaddr(email_address)
-    if '@' in addr:
-        return addr.split('@')[1].strip().lower()
+    target = addr if addr else email_address
+    if '@' in target:
+        domain = target.split('@')[-1].strip().lower().replace('>', '').replace(';', '')
+        return domain
     # Fallback: tìm domain trong chuỗi
     match = re.search(r'@([\w.-]+)', email_address)
     if match:
@@ -140,8 +144,20 @@ def lookup_domain_age(domain):
             'created_date': None,
             'expiry_date': None,
             'registrar': None,
-            'is_suspicious': False,
+            'is_suspicious': True if domain else False,
             'error': 'python-whois chưa cài đặt' if not HAS_WHOIS else 'Không có domain'
+        }
+
+    # Kiểm tra domain không có dấu chấm (như "pot", "localhost", không phải FQDN)
+    if '.' not in domain:
+        return {
+            'sender_domain': domain,
+            'domain_age_days': None,
+            'created_date': None,
+            'expiry_date': None,
+            'registrar': None,
+            'is_suspicious': True,
+            'error': f"Tên miền không hợp lệ (thiếu TLD / không phải FQDN: '{domain}')"
         }
 
     try:
@@ -193,14 +209,17 @@ def lookup_domain_age(domain):
         }
 
     except Exception as e:
+        err_msg = str(e)
+        if 'no output' in err_msg.lower() or 'not found' in err_msg.lower() or 'no match' in err_msg.lower():
+            err_msg = f"Tên miền không tồn tại trong WHOIS quốc tế ({err_msg})"
         return {
             'sender_domain': domain,
             'domain_age_days': None,
             'created_date': None,
             'expiry_date': None,
             'registrar': None,
-            'is_suspicious': False,
-            'error': str(e)
+            'is_suspicious': True,
+            'error': err_msg
         }
 
 
@@ -250,23 +269,35 @@ def detect_anomalies(headers, authentication, domain_info):
         })
 
     # 4. DKIM fail/none
-    if authentication['dkim']['status'] in ('fail', 'none'):
+    if authentication['dkim']['status'] == 'fail':
         anomalies.append({
             'type': 'DKIM_FAIL',
-            'detail': f"DKIM {authentication['dkim']['status']} — email không được ký xác thực",
-            'severity': 'HIGH' if authentication['dkim']['status'] == 'fail' else 'MEDIUM'
+            'detail': "DKIM fail — Chữ ký số không hợp lệ hoặc bị can thiệp",
+            'severity': 'HIGH'
+        })
+    elif authentication['dkim']['status'] == 'none':
+        anomalies.append({
+            'type': 'DKIM_NONE',
+            'detail': "DKIM none — Email không có chữ ký số xác thực",
+            'severity': 'MEDIUM'
         })
 
     # 5. DMARC fail/none
-    if authentication['dmarc']['status'] in ('fail', 'none'):
+    if authentication['dmarc']['status'] == 'fail':
         anomalies.append({
             'type': 'DMARC_FAIL',
-            'detail': f"DMARC {authentication['dmarc']['status']}",
-            'severity': 'HIGH' if authentication['dmarc']['status'] == 'fail' else 'MEDIUM'
+            'detail': "DMARC fail — Vi phạm chính sách xác thực người gửi",
+            'severity': 'HIGH'
+        })
+    elif authentication['dmarc']['status'] == 'none':
+        anomalies.append({
+            'type': 'DMARC_NONE',
+            'detail': "DMARC none — Tên miền chưa áp dụng chính sách bảo vệ DMARC",
+            'severity': 'MEDIUM'
         })
 
     # 6. Domain Age < 30 ngày
-    if domain_info.get('is_suspicious'):
+    if domain_info.get('is_suspicious') and domain_info.get('domain_age_days') is not None:
         age = domain_info.get('domain_age_days', 'N/A')
         anomalies.append({
             'type': 'NEW_DOMAIN',
@@ -274,12 +305,18 @@ def detect_anomalies(headers, authentication, domain_info):
             'severity': 'CRITICAL' if (isinstance(age, int) and age < 7) else 'HIGH'
         })
 
-    # 7. Domain không tồn tại trong WHOIS (có thể đã hết hạn hoặc giả mạo)
+    # 7. Domain không tồn tại hoặc không hợp lệ trong WHOIS
     whois_error = domain_info.get('error', '') or ''
-    if 'No match' in whois_error or 'NOT FOUND' in whois_error.upper():
+    if whois_error and ('No match' in whois_error or 'NOT FOUND' in whois_error.upper() or 'no output' in whois_error.lower() or 'không hợp lệ' in whois_error.lower() or 'không tồn tại' in whois_error.lower()):
         anomalies.append({
             'type': 'DOMAIN_NOT_FOUND',
-            'detail': f"Domain {domain_info['sender_domain']} không tồn tại trong WHOIS — có thể là domain giả mạo",
+            'detail': f"Domain '{domain_info.get('sender_domain')}' không tồn tại hoặc không hợp lệ ({whois_error})",
+            'severity': 'CRITICAL'
+        })
+    elif from_domain and '.' not in from_domain:
+        anomalies.append({
+            'type': 'INVALID_DOMAIN',
+            'detail': f"Tên miền người gửi '{from_domain}' không hợp lệ (thiếu TLD / không phải FQDN)",
             'severity': 'CRITICAL'
         })
 
@@ -301,7 +338,8 @@ COMMONLY_SPOOFED_BRANDS = [
     'instagram', 'chase', 'wellsfargo', 'bankofamerica', 'citibank', 'dhl',
     'fedex', 'ups', 'adobe', 'dropbox', 'linkedin', 'twitter', 'telegram',
     'binance', 'coinbase', 'metamask', 'vietcombank', 'techcombank', 'mbbank',
-    'bidv', 'agribank', 'tpbank', 'vpbank', 'acb', 'outlook', 'office365'
+    'bidv', 'agribank', 'tpbank', 'vpbank', 'acb', 'outlook', 'office365',
+    'bradesco', 'livelo', 'santander', 'itau'
 ]
 
 
@@ -357,9 +395,9 @@ def calculate_risk_score(authentication, anomalies, domain_info):
     # SPF
     spf_status = authentication['spf']['status']
     if spf_status == 'fail':
-        score += 25
+        score += 35
     elif spf_status == 'softfail':
-        score += 15
+        score += 25
     elif spf_status == 'none':
         score += 10
 
@@ -413,10 +451,12 @@ def calculate_risk_score(authentication, anomalies, domain_info):
     # Xác định mức rủi ro
     if score >= 75:
         risk_level = 'HIGH'
-    elif score >= 50:
+    elif score >= 25 or any(a.get('severity') in ('HIGH', 'CRITICAL') for a in anomalies):
         risk_level = 'MEDIUM'
-    else:
+    elif score > 0 or len(anomalies) > 0:
         risk_level = 'LOW'
+    else:
+        risk_level = 'CLEAN'
 
     return score, risk_level
 

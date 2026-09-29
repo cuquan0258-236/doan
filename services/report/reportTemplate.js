@@ -325,50 +325,40 @@ function renderReportHtml(data) {
                 </div>
             ` : ''}
 
-            ${data.ruleEvaluation.typosquatInfo ? `
-                <div style="background: #fff0f0; border-left: 4px solid #e74c3c; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px; font-size: 12px; color: #c0392b;">
-                    <strong>🎯 Cảnh Báo Typosquatting (+20đ):</strong> Phát hiện chuỗi <strong>'${escapeHtml(data.ruleEvaluation.typosquatInfo.matchedToken)}'</strong> giả mạo thương hiệu <strong>${escapeHtml(data.ruleEvaluation.typosquatInfo.brand.toUpperCase())}</strong> (Khoảng cách Levenshtein: ${data.ruleEvaluation.typosquatInfo.distance}) trong tên miền người gửi.
-                </div>
-            ` : ''}
 
-            ${data.ruleEvaluation.isDomainNotFound ? `
-                <div style="background: #fff8e7; border-left: 4px solid #e67e22; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px; font-size: 12px; color: #d35400;">
-                    <strong>⚠️ Cảnh Báo Tên Miền Không Tồn Tại (+25đ):</strong> Tên miền gửi không tồn tại trên hệ thống máy chủ định danh quốc tế (DNS/WHOIS No Match).
-                </div>
-            ` : ''}
 
             <!-- Capped Modules Breakdown -->
             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px;">
                 <div style="background: #f8f9fa; padding: 10px 14px; border-radius: 6px; border: 1px solid #e9ecef;">
                     <div style="font-size: 11px; color: #7f8fa6; text-transform: uppercase;">Header Authentication</div>
-                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.header} <span style="font-size: 11px; color: #888;">/ trần 25đ</span></div>
+                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.header} <span style="font-size: 11px; color: #888;">/ trần 30đ</span></div>
                 </div>
                 <div style="background: #f8f9fa; padding: 10px 14px; border-radius: 6px; border: 1px solid #e9ecef;">
                     <div style="font-size: 11px; color: #7f8fa6; text-transform: uppercase;">Domain & Typosquatting</div>
-                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.domainAge} <span style="font-size: 11px; color: #888;">/ trần 45đ</span></div>
+                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.domainAge} <span style="font-size: 11px; color: #888;">/ trần 60đ</span></div>
                 </div>
                 <div style="background: #f8f9fa; padding: 10px 14px; border-radius: 6px; border: 1px solid #e9ecef;">
                     <div style="font-size: 11px; color: #7f8fa6; text-transform: uppercase;">Nội dung AI LLM</div>
-                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.llm} <span style="font-size: 11px; color: #888;">/ trần 20đ</span></div>
+                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.llm} <span style="font-size: 11px; color: #888;">/ trần 50đ</span></div>
                 </div>
                 <div style="background: #f8f9fa; padding: 10px 14px; border-radius: 6px; border: 1px solid #e9ecef;">
                     <div style="font-size: 11px; color: #7f8fa6; text-transform: uppercase;">URL Scanner</div>
-                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.url} <span style="font-size: 11px; color: #888;">/ trần 35đ</span></div>
+                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.url} <span style="font-size: 11px; color: #888;">/ trần 50đ</span></div>
                 </div>
                 <div style="background: #f8f9fa; padding: 10px 14px; border-radius: 6px; border: 1px solid #e9ecef;">
                     <div style="font-size: 11px; color: #7f8fa6; text-transform: uppercase;">Tệp Đính Kèm</div>
-                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.attachment} <span style="font-size: 11px; color: #888;">/ trần 40đ</span></div>
+                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.attachment} <span style="font-size: 11px; color: #888;">/ trần 50đ</span></div>
                 </div>
                 <div style="background: #f8f9fa; padding: 10px 14px; border-radius: 6px; border: 1px solid #e9ecef;">
                     <div style="font-size: 11px; color: #7f8fa6; text-transform: uppercase;">Threat Intel IOCs</div>
-                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.ioc} <span style="font-size: 11px; color: #888;">/ trần 30đ</span></div>
+                    <div style="font-size: 16px; font-weight: bold; color: #2f3542; margin-top: 2px;">${data.ruleEvaluation.moduleScores.ioc} <span style="font-size: 11px; color: #888;">/ trần 50đ</span></div>
                 </div>
             </div>
 
             ${data.ruleEvaluation.correlationBonuses && data.ruleEvaluation.correlationBonuses.length > 0 ? `
-                <div style="background: #fff8e1; border: 1px solid #ffeaa7; padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 12px; color: #d35400;">
-                    <strong>⭐ Điểm Thưởng Tương Quan (Correlation Bonus):</strong>
-                    ${data.ruleEvaluation.correlationBonuses.map(b => `<div style="margin-top: 2px;">+ ${b.points}đ: ${escapeHtml(b.rule)}</div>`).join('')}
+                <div style="background: #f1f8ff; border: 1px solid #c8e1ff; padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 12px; color: #0366d6;">
+                    <strong>🔗 Quy Tắc Tương Quan Phát Hiện (Correlation Rules):</strong>
+                    ${data.ruleEvaluation.correlationBonuses.map(b => `<div style="margin-top: 3px; color: #24292e;">• ${escapeHtml(b.rule || b)}</div>`).join('')}
                 </div>
             ` : ''}
 

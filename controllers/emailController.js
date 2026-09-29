@@ -4,6 +4,47 @@ const EmailRecord = require('../models/EmailRecord');
 const threatIntelService = require('../services/threatIntelService');
 const responseService = require('../services/responseService');
 const reportService = require('../services/reportService');
+const ruleEngineService = require('../services/ruleEngineService');
+
+/**
+ * Hàm hỗ trợ: Tái tính toán đánh giá Rule Engine và cập nhật DB tức thời
+ */
+async function recalculateEmailEvaluation(emailId) {
+    if (!emailId) return null;
+    try {
+        const record = await EmailRecord.findById(emailId);
+        if (!record) return null;
+
+        const ruleEvaluation = ruleEngineService.evaluateEmail(record);
+        if (ruleEvaluation.verdict === 'UNANALYZED') {
+            record.overallRiskScore = null;
+            record.riskLevel = null;
+            record.riskScore = null;
+            record.ruleEvaluation = null;
+            record.responseActions = [];
+            await record.save();
+            return { record, ruleEvaluation: null };
+        }
+
+        const overallScore = ruleEvaluation.totalScore;
+        const overallVerdict = ruleEvaluation.verdict;
+        const responseActions = (overallVerdict === 'MALICIOUS' || overallVerdict === 'SUSPICIOUS')
+            ? (ruleEvaluation.playbookActions || [])
+            : [];
+
+        record.overallRiskScore = overallScore;
+        record.riskLevel = overallVerdict;
+        record.riskScore = overallScore;
+        record.ruleEvaluation = ruleEvaluation;
+        record.responseActions = responseActions;
+
+        await record.save();
+        return { record, ruleEvaluation };
+    } catch (err) {
+        console.warn(`[RuleEngine Sync] Lỗi tái tính toán evaluation: ${err.message}`);
+        return null;
+    }
+}
 
 /**
  * POST /api/analyze
@@ -109,6 +150,7 @@ exports.analyzeHeader = async (req, res) => {
                 }
 
                 // Lưu kết quả vào MongoDB
+                let evalRes = null;
                 if (emailId) {
                     await EmailRecord.findByIdAndUpdate(emailId, {
                         headerAnalysis: analysisResult,
@@ -116,6 +158,7 @@ exports.analyzeHeader = async (req, res) => {
                         riskLevel: analysisResult.risk_level
                     });
                     console.log(`[SOAR] Đã lưu header analysis vào DB (risk: ${analysisResult.risk_level} - ${analysisResult.risk_score})`);
+                    evalRes = await recalculateEmailEvaluation(emailId);
                 }
 
                 const riskEmoji = analysisResult.risk_level === 'HIGH' ? '🔴' :
@@ -128,7 +171,11 @@ exports.analyzeHeader = async (req, res) => {
                     status: 'success',
                     message: 'Phân tích header hoàn tất',
                     emailId: emailId || null,
-                    data: analysisResult
+                    data: analysisResult,
+                    ruleEvaluation: evalRes?.ruleEvaluation || null,
+                    overallRiskScore: evalRes?.record?.overallRiskScore ?? null,
+                    riskLevel: evalRes?.record?.riskLevel ?? null,
+                    responseActions: evalRes?.record?.responseActions ?? []
                 });
             } catch (parseError) {
                 console.error(`[SOAR] Lỗi parse JSON: ${stdout}`);
@@ -177,6 +224,7 @@ exports.analyzeContent = async (req, res) => {
                 }
 
                 // Cập nhật kết quả vào MongoDB
+                let evalRes = null;
                 if (emailId) {
                     const aiData = analysisResult.ai_analysis?.data || {};
                     await EmailRecord.findByIdAndUpdate(emailId, {
@@ -185,13 +233,18 @@ exports.analyzeContent = async (req, res) => {
                         contentVerdict: aiData.verdict || null
                     });
                     console.log(`[SOAR AI] Đã lưu kết quả phân tích nội dung vào DB (Điểm: ${aiData.social_engineering_score}, Verdict: ${aiData.verdict})`);
+                    evalRes = await recalculateEmailEvaluation(emailId);
                 }
 
                 return res.status(200).json({
                     status: 'success',
                     message: 'Phân tích nội dung AI hoàn tất',
                     emailId: emailId || null,
-                    data: analysisResult
+                    data: analysisResult,
+                    ruleEvaluation: evalRes?.ruleEvaluation || null,
+                    overallRiskScore: evalRes?.record?.overallRiskScore ?? null,
+                    riskLevel: evalRes?.record?.riskLevel ?? null,
+                    responseActions: evalRes?.record?.responseActions ?? []
                 });
             } catch (parseError) {
                 console.error(`[SOAR AI] Lỗi parse JSON: ${stdout}`);
@@ -240,18 +293,24 @@ exports.analyzeUrls = async (req, res) => {
                 }
 
                 // Lưu kết quả vào MongoDB
+                let evalRes = null;
                 if (emailId) {
                     await EmailRecord.findByIdAndUpdate(emailId, {
                         urlAnalysis: analysisResult
                     });
                     console.log(`[SOAR URL] Đã lưu URL analysis vào DB (${analysisResult.total_urls} URLs, verdict: ${analysisResult.overall_verdict})`);
+                    evalRes = await recalculateEmailEvaluation(emailId);
                 }
 
                 return res.status(200).json({
                     status: 'success',
                     message: `Phân tích ${analysisResult.total_urls} URL hoàn tất`,
                     emailId: emailId || null,
-                    data: analysisResult
+                    data: analysisResult,
+                    ruleEvaluation: evalRes?.ruleEvaluation || null,
+                    overallRiskScore: evalRes?.record?.overallRiskScore ?? null,
+                    riskLevel: evalRes?.record?.riskLevel ?? null,
+                    responseActions: evalRes?.record?.responseActions ?? []
                 });
             } catch (parseError) {
                 console.error(`[SOAR URL] Lỗi parse JSON: ${stdout.substring(0, 500)}`);
@@ -300,18 +359,24 @@ exports.analyzeAttachments = async (req, res) => {
                 }
 
                 // Lưu kết quả vào MongoDB
+                let evalRes = null;
                 if (emailId) {
                     await EmailRecord.findByIdAndUpdate(emailId, {
                         attachmentAnalysis: analysisResult
                     });
                     console.log(`[SOAR Attachment] Đã lưu Attachment analysis vào DB (${analysisResult.total_attachments} files, verdict: ${analysisResult.overall_verdict})`);
+                    evalRes = await recalculateEmailEvaluation(emailId);
                 }
 
                 return res.status(200).json({
                     status: 'success',
                     message: `Phân tích ${analysisResult.total_attachments} file đính kèm hoàn tất`,
                     emailId: emailId || null,
-                    data: analysisResult
+                    data: analysisResult,
+                    ruleEvaluation: evalRes?.ruleEvaluation || null,
+                    overallRiskScore: evalRes?.record?.overallRiskScore ?? null,
+                    riskLevel: evalRes?.record?.riskLevel ?? null,
+                    responseActions: evalRes?.record?.responseActions ?? []
                 });
             } catch (parseError) {
                 console.error(`[SOAR Attachment] Lỗi parse JSON: ${stdout.substring(0, 500)}`);
@@ -365,8 +430,9 @@ exports.analyzeIOC = async (req, res) => {
 
         console.log(`[SOAR ThreatIntel] Bắt đầu làm rõ IOCs cho Email: ${record._id} (${record.subject})`);
 
-        // Đảm bảo có tối thiểu thông tin IOCs từ file .eml nếu chưa chạy các bước trước
-        if (!record.headerAnalysis && record.emlFilePath) {
+        // Đảm bảo có tối thiểu thông tin IOCs từ file .eml nếu chưa chạy các bước trước (dùng bản copy tạm trong RAM, không lưu stub rỗng vào DB)
+        const enrichmentRecord = record.toObject ? record.toObject() : { ...record };
+        if (!enrichmentRecord.headerAnalysis && record.emlFilePath) {
             try {
                 const fs = require('fs');
                 if (fs.existsSync(record.emlFilePath)) {
@@ -375,15 +441,15 @@ exports.analyzeIOC = async (req, res) => {
                     const ipMatches = rawContent.match(/\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/g) || [];
                     const urlMatches = rawContent.match(/https?:\/\/[^\s<>"')]+/gi) || [];
 
-                    if (!record.headerAnalysis) {
-                        record.headerAnalysis = {
+                    if (!enrichmentRecord.headerAnalysis) {
+                        enrichmentRecord.headerAnalysis = {
                             headers: {
                                 received_chain: [...new Set(ipMatches)].slice(0, 5).map(ip => ({ ip }))
                             }
                         };
                     }
-                    if (!record.urlAnalysis) {
-                        record.urlAnalysis = {
+                    if (!enrichmentRecord.urlAnalysis) {
+                        enrichmentRecord.urlAnalysis = {
                             urls: [...new Set(urlMatches)].slice(0, 10).map(u => ({ url: u }))
                         };
                     }
@@ -394,11 +460,13 @@ exports.analyzeIOC = async (req, res) => {
         }
 
         // Thực hiện làm rõ IOCs (với Cache 24h)
-        const iocAnalysis = await threatIntelService.enrichAllIOCsFromEmail(record);
+        const iocAnalysis = await threatIntelService.enrichAllIOCsFromEmail(enrichmentRecord);
 
         // Lưu vào MongoDB
         record.iocAnalysis = iocAnalysis;
         await record.save();
+
+        const evalRes = await recalculateEmailEvaluation(record._id);
 
         console.log(`[SOAR ThreatIntel] Hoàn tất làm rõ IOC: ${iocAnalysis.totalIOCs} IOCs (${iocAnalysis.cachedCount} từ cache, ${iocAnalysis.liveQueriedCount} gọi API mới) - Verdict: ${iocAnalysis.overallVerdict}`);
 
@@ -406,7 +474,11 @@ exports.analyzeIOC = async (req, res) => {
             status: 'success',
             message: `Làm rõ ${iocAnalysis.totalIOCs} IOCs thành công`,
             emailId: record._id,
-            data: iocAnalysis
+            data: iocAnalysis,
+            ruleEvaluation: evalRes?.ruleEvaluation || null,
+            overallRiskScore: evalRes?.record?.overallRiskScore ?? null,
+            riskLevel: evalRes?.record?.riskLevel ?? null,
+            responseActions: evalRes?.record?.responseActions ?? []
         });
     } catch (error) {
         console.error(`[SOAR ThreatIntel] Lỗi analyzeIOC: ${error.message}`);

@@ -34,7 +34,6 @@ async function selectEmail(id) {
             <button class="btn-analyze" style="background: linear-gradient(135deg, #20bf6b33, #0fb9b133); border-color: #20bf6b88; color: #2bcbba;" onclick="analyzeAttachments('${id}')">📎 Phân tích Attachment</button>
             <button class="btn-analyze" style="background: linear-gradient(135deg, #3867d633, #4b7bec33); border-color: #4b7bec88; color: #45aaf2;" onclick="analyzeIOC('${id}')">🌐 Làm rõ IOC (Threat Intel)</button>
             <button class="btn-verify" onclick="verifyHash('${id}')">🔒 Xác minh SHA-256</button>
-            <button class="btn-analyze" style="background: linear-gradient(135deg, #2ed57333, #2bcbba33); border-color: #2ed57388; color: #2ed573; font-weight: bold;" onclick="openReportPDF('${id}')">📄 Báo cáo PDF</button>
         </div>
         <!-- Step 8: Response & Reporting Section -->
         <div id="response-reporting-section" style="margin-bottom: 20px;">
@@ -69,7 +68,7 @@ async function selectEmail(id) {
         </div>
         <!-- Header Analysis Section -->
         <div id="analysis-section">
-            ${email.headerAnalysis ? renderAnalysis(email.headerAnalysis) : `
+            ${(email.headerAnalysis && email.headerAnalysis.authentication) ? renderAnalysis(email.headerAnalysis) : `
                 <div class="no-analysis">
                     <p>Chưa phân tích header. Nhấn <strong>🔍 Phân tích Header</strong> để bắt đầu.</p>
                 </div>

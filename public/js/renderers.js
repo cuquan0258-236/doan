@@ -13,7 +13,15 @@ function renderList() {
         return;
     }
     container.innerHTML = emails.map(e => {
-        const v = e.riskLevel || (e.riskScore >= 75 ? 'MALICIOUS' : e.riskScore >= 50 ? 'SUSPICIOUS' : (e.riskScore !== null && e.riskScore !== undefined) ? 'CLEAN' : 'none');
+        const isUnanalyzed = !e.headerAnalysis && !e.contentAnalysis && !e.urlAnalysis && !e.attachmentAnalysis && !e.iocAnalysis;
+        const v = isUnanalyzed ? 'UNANALYZED' : (e.riskLevel || (e.riskScore >= 75 ? 'MALICIOUS' : e.riskScore >= 50 ? 'SUSPICIOUS' : (e.riskScore !== null && e.riskScore !== undefined) ? 'CLEAN' : 'none'));
+        
+        const badgeHtml = isUnanalyzed 
+            ? `<span class="tag" style="background:#a4b0be22;color:#a4b0be;border:1px solid #a4b0be44;">⚪ Chưa phân tích</span>`
+            : (e.riskLevel || typeof e.riskScore === 'number' 
+                ? `<span class="tag" style="background:${riskColor(v)}22;color:${riskColor(v)}">${v} (${e.riskScore ?? e.overallRiskScore ?? 0})</span>` 
+                : '');
+
         return `
         <div class="email-item ${e._id === selectedId ? 'active' : ''}" onclick="selectEmail('${e._id}')">
             <div class="risk-dot ${v}"></div>
@@ -22,7 +30,7 @@ function renderList() {
                 <div class="subject">${decodeSubject(e.subject)}</div>
                 <div class="meta-row">
                     <span class="tag status-${e.status}">${e.status}</span>
-                    ${e.riskLevel || typeof e.riskScore === 'number' ? `<span class="tag" style="background:${riskColor(v)}22;color:${riskColor(v)}">${v} (${e.riskScore ?? e.overallRiskScore ?? 0})</span>` : ''}
+                    ${badgeHtml}
                     <span class="tag" style="background:#ffffff08;color:#666">${formatSize(e.fileSize)}</span>
                 </div>
             </div>
@@ -35,11 +43,18 @@ function renderList() {
  * Cập nhật các khối thống kê tổng số lượng email và phân cấp rủi ro
  */
 function updateStats() {
-    document.getElementById('stat-total').textContent = emails.length;
-    const maliciousCount = emails.filter(e => e.riskLevel === 'MALICIOUS' || e.riskLevel === 'HIGH').length;
-    const suspiciousCount = emails.filter(e => e.riskLevel === 'SUSPICIOUS' || e.riskLevel === 'MEDIUM').length;
-    const cleanCount = emails.filter(e => e.riskLevel === 'CLEAN' || e.riskLevel === 'LOW' || (!e.riskLevel && (e.riskScore || 0) < 50)).length;
+    const elTotal = document.getElementById('stat-total');
+    if (elTotal) elTotal.textContent = emails.length;
 
+    const isUnanalyzed = e => !e.headerAnalysis && !e.contentAnalysis && !e.urlAnalysis && !e.attachmentAnalysis && !e.iocAnalysis;
+
+    const pendingCount = emails.filter(isUnanalyzed).length;
+    const maliciousCount = emails.filter(e => !isUnanalyzed(e) && (e.riskLevel === 'MALICIOUS' || e.riskLevel === 'HIGH' || (e.riskScore || 0) >= 75)).length;
+    const suspiciousCount = emails.filter(e => !isUnanalyzed(e) && (e.riskLevel === 'SUSPICIOUS' || e.riskLevel === 'MEDIUM' || ((e.riskScore || 0) >= 50 && (e.riskScore || 0) < 75))).length;
+    const cleanCount = emails.filter(e => !isUnanalyzed(e) && (e.riskLevel === 'CLEAN' || e.riskLevel === 'LOW' || ((e.riskScore || 0) < 50 && e.riskScore !== null && e.riskScore !== undefined))).length;
+
+    const elPending = document.getElementById('stat-pending');
+    if (elPending) elPending.textContent = pendingCount;
     const elMal = document.getElementById('stat-malicious');
     if (elMal) elMal.textContent = maliciousCount;
     const elSusp = document.getElementById('stat-suspicious');
@@ -89,13 +104,16 @@ function renderContentAnalysis(ca) {
             </div>
 
             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 16px;">
-                <!-- SE Score -->
-                <div style="background:#0f1420; border-radius:8px; padding:14px; text-align:center; border: 1px solid #ffffff0a;">
-                    <div style="font-size:11px; color:#888; text-transform:uppercase; margin-bottom:4px;">Điểm Thao Túng Tâm Lý</div>
-                    <div style="font-size:32px; font-weight:bold; color:${verdictColor};">${seScore} <span style="font-size:14px; color:#666;">/ 100</span></div>
-                    <span style="display:inline-block; margin-top:4px; padding:3px 10px; border-radius:4px; font-size:11px; font-weight:bold; background:${verdictColor}22; color:${verdictColor};">
-                        ${verdict}
-                    </span>
+                <!-- SE Assessment -->
+                <div style="background:#0f1420; border-radius:8px; padding:14px; text-align:center; border: 1px solid #ffffff0a; display:flex; flex-direction:column; justify-content:center; align-items:center;">
+                    <div style="font-size:11px; color:#888; text-transform:uppercase; margin-bottom:8px; font-weight:600; letter-spacing:0.5px;">Đánh Giá Thao Túng Tâm Lý</div>
+                    <div style="display:inline-flex; align-items:center; gap:6px; padding:6px 14px; border-radius:6px; font-size:13px; font-weight:bold; background:${verdictColor}22; color:${verdictColor}; border:1px solid ${verdictColor}44; margin-bottom:8px;">
+                        <span>${verdict === 'PHISHING' ? '🔴' : verdict === 'SUSPICIOUS' ? '🟡' : '🟢'}</span>
+                        <span>${verdict === 'PHISHING' ? 'NGUY CƠ CAO (PHISHING)' : verdict === 'SUSPICIOUS' ? 'ĐÁNG NGỜ (SUSPICIOUS)' : 'AN TOÀN (CLEAN)'}</span>
+                    </div>
+                    <div style="font-size:11.5px; color:#aaa; line-height:1.4;">
+                        ${verdict === 'PHISHING' ? 'Phát hiện hành vi dẫn dụ / thao túng tâm lý rõ rệt' : verdict === 'SUSPICIOUS' ? 'Có yếu tố nghi vấn về đòn tâm lý trong thư' : 'Nội dung thư thông thường, không phát hiện dẫn dụ'}
+                    </div>
                 </div>
 
                 <!-- Urgency & Target -->
@@ -184,7 +202,6 @@ function renderUrlAnalysis(ua) {
                             ${h.redirect_to ? '<span style="color:#666;">→</span>' : ''}
                         `).join('')}
                     </div>
-                    ${rc.domain_changed ? `<div style="color:#ff4757; font-size:11px; margin-top:4px;">🔴 Domain thay đổi: ${escHtml(rc.initial_domain)} → ${escHtml(rc.final_domain)}</div>` : ''}
                 </div>
 
                 <!-- Flags -->
@@ -542,14 +559,36 @@ function renderAnalysis(a) {
     const headers = a.headers || {};
     const chain = headers.received_chain || [];
 
+    // Phân cấp nhãn hiển thị trực quan và chuẩn xác
+    let circleClass = 'CLEAN';
+    let labelText = '🟢 AN TOÀN';
+
+    if (riskScore >= 75 || riskLevel === 'HIGH') {
+        circleClass = 'HIGH';
+        labelText = '🔴 NGUY CƠ CAO';
+    } else if (riskScore >= 25 || riskLevel === 'MEDIUM' || anomalies.some(an => an.severity === 'HIGH' || an.severity === 'CRITICAL')) {
+        circleClass = 'MEDIUM';
+        labelText = '🟡 CẦN KIỂM TRA (CÓ BẤT THƯỜNG)';
+    } else if (riskScore > 0 || anomalies.length > 0 || riskLevel === 'LOW') {
+        circleClass = 'LOW';
+        labelText = '🟡 CẢNH BÁO RỦI RO THẤP';
+    } else {
+        circleClass = 'CLEAN';
+        labelText = '🟢 AN TOÀN';
+    }
+
     return `
         <div class="cards-grid">
-            <!-- Risk Score -->
-            <div class="card">
-                <h3>⚡ Điểm Rủi Ro</h3>
-                <div class="risk-display">
-                    <div class="risk-score-circle ${riskLevel}">${riskScore}</div>
-                    <div class="risk-label ${riskLevel}">${riskLevel === 'HIGH' ? '🔴 NGUY CƠ CAO' : riskLevel === 'MEDIUM' ? '🟡 CẦN KIỂM TRA' : '🟢 AN TOÀN'}</div>
+            <!-- Risk Level Assessment -->
+            <div class="card" style="display:flex; flex-direction:column; justify-content:space-between;">
+                <h3>⚡ Đánh Giá Kỹ Thuật Header</h3>
+                <div style="text-align:center; padding:14px 10px; background:#0f1420; border-radius:8px; border:1px solid #ffffff0d; margin-top:6px;">
+                    <div style="display:inline-flex; align-items:center; gap:6px; padding:6px 14px; border-radius:6px; font-size:13px; font-weight:bold; background:${labelText.includes('🔴') ? '#ff475722' : labelText.includes('🟡') ? '#ffa50222' : '#2ed57322'}; color:${labelText.includes('🔴') ? '#ff4757' : labelText.includes('🟡') ? '#ffa502' : '#2ed573'}; border:1px solid ${labelText.includes('🔴') ? '#ff475744' : labelText.includes('🟡') ? '#ffa50244' : '#2ed57344'}; margin-bottom:8px;">
+                        <span>${labelText}</span>
+                    </div>
+                    <div style="font-size:11.5px; color:#aaa; line-height:1.4;">
+                        ${anomalies.length > 0 ? `Phát hiện ${anomalies.length} bất thường cấu hình xác thực máy chủ gửi` : 'Toàn bộ cơ chế xác thực máy chủ gửi (SPF/DKIM/DMARC) đạt chuẩn'}
+                    </div>
                 </div>
             </div>
 
@@ -567,7 +606,7 @@ function renderAnalysis(a) {
                     </div>
                     <div class="auth-badge ${auth.dmarc?.status || 'none'}">
                         <div class="protocol">DMARC</div>
-                        <div class="status">${(auth.dmarc?.status || 'N/A').toUpperCase()}</div>
+                        <div class="status" style="${auth.dmarc?.status === 'bestguesspass' ? 'font-size:12px;' : ''}">${auth.dmarc?.status === 'bestguesspass' ? 'BEST GUESS' : (auth.dmarc?.status || 'N/A').toUpperCase()}</div>
                     </div>
                 </div>
             </div>
@@ -615,22 +654,6 @@ function renderAnalysis(a) {
                 <div class="row"><span class="label">X-Mailer</span><span class="value">${escHtml(headers.x_mailer || 'N/A')}</span></div>
             </div>
         </div>
-
-        ${chain.length > 0 ? `
-            <div class="card" style="margin-top:16px">
-                <h3>🔗 Received Chain (${chain.length} hops)</h3>
-                ${chain.map(h => `
-                    <div class="hop-item">
-                        <div class="hop-num">Hop ${h.hop}</div>
-                        <div class="hop-detail">
-                            ${h.from ? `From: <span>${h.from}</span>` : ''}
-                            ${h.by ? ` → By: <span>${h.by}</span>` : ''}
-                            ${h.ip ? ` [IP: <span>${h.ip}</span>]` : ''}
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-        ` : ''}
     `;
 }
 
@@ -640,6 +663,37 @@ function renderAnalysis(a) {
 function renderResponseSection(email) {
     if (!email) return '';
     const id = email._id;
+
+    const hasAnyAnalysis = Boolean(email.headerAnalysis || email.contentAnalysis || email.urlAnalysis || email.attachmentAnalysis || email.iocAnalysis);
+    if (!hasAnyAnalysis) {
+        return `
+            <div class="card" style="border: 1px dashed #747d8c88; background: #131826;">
+                <!-- Header -->
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; border-bottom:1px solid #ffffff15; padding-bottom:12px; flex-wrap:wrap; gap:10px;">
+                    <div>
+                        <h3 style="color:#a4b0be; margin:0; font-size:15px; display:flex; align-items:center; gap:8px;">
+                            <span>⚪</span> PHẢN ỨNG (RESPONSE) &amp; XUẤT BÁO CÁO SỰ CỐ SOC
+                        </h3>
+                        <div style="color:#888; font-size:11px; margin-top:2px;">Email này chưa được phân tích kỹ thuật. Hãy bấm các nút phân tích phía trên để bắt đầu điều tra.</div>
+                    </div>
+                </div>
+
+                <!-- Unanalyzed Banner -->
+                <div style="display:flex; justify-content:space-between; align-items:center; background:#0b0f19; padding:14px 18px; border-radius:8px; border:1px dashed #747d8c55;">
+                    <div>
+                        <div style="font-size:11px; text-transform:uppercase; color:#888; letter-spacing:0.5px; margin-bottom:4px;">Tổng hợp phân cấp Rule Engine (Verdict &amp; Risk Score)</div>
+                        <div style="font-size:15px; font-weight:bold; color:#a4b0be; display:flex; align-items:center; gap:6px;">
+                            <span>⚪</span> CHƯA XÁC ĐỊNH — CHỜ PHÂN TÍCH (CHƯA ĐÁNH GIÁ NGUY HIỂM / AN TOÀN)
+                        </div>
+                    </div>
+                    <div style="text-align:right;">
+                        <span style="font-size:24px; font-weight:bold; color:#a4b0be;">—</span>
+                        <span style="color:#666; font-size:12px;">/100</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
 
     // Overall Risk synthesis
     const scores = [];
@@ -690,58 +744,87 @@ function renderResponseSection(email) {
 
             ${ruleEval ? `
             <!-- Rule Engine Matrix Card -->
-            <div style="background:#0f1422; border-radius:8px; padding:12px 14px; margin-bottom:16px; border:1px solid #ffffff15;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                    <div style="font-size:12px; font-weight:bold; color:#00d4ff; text-transform:uppercase;">
-                        ⚙️ Ma Trận Quy Tắc Đánh Giá (SOAR Rule Engine)
+            <div style="background:#0f1422; border-radius:8px; padding:14px 16px; margin-bottom:16px; border:1px solid #ffffff15; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom: 1px solid #ffffff10; padding-bottom: 8px;">
+                    <div style="font-size:12px; font-weight:bold; color:#00d4ff; text-transform:uppercase; display:flex; align-items:center; gap:6px;">
+                        <span>⚙️</span> MA TRẬN QUY TẮC ĐÁNH GIÁ (SOAR RULE ENGINE)
                     </div>
-                    <span style="font-size:11px; padding:3px 8px; border-radius:4px; font-weight:bold; background:${statusColor}22; color:${statusColor};">
+                    <span style="font-size:11px; padding:3px 10px; border-radius:12px; font-weight:bold; background:${statusColor}22; color:${statusColor}; border:1px solid ${statusColor}44;">
                         ${ruleEval.verdict} (${ruleEval.totalScore}/100đ)
                     </span>
                 </div>
 
-                <div style="font-size:11px; color:#aaa; margin-bottom:10px;">
-                    <div style="margin-bottom:6px; font-weight:bold; color:#888;">HÀNH ĐỘNG QUY ĐỊNH (SOAR PLAYBOOK):</div>
-                    <div style="display:flex; flex-direction:column; gap:4px;">
-                        ${(ruleEval.actionNameVi || '').split(' | ').map(act => `
-                            <div style="background:#161d2d; padding:5px 10px; border-radius:4px; border-left:3px solid #2bcbba; color:#2bcbba; font-size:11px; font-weight:500;">
-                                ⚡ ${escHtml(act)}
-                            </div>
-                        `).join('')}
+                <div style="font-size:11px; color:#aaa; margin-bottom:12px;">
+                    <div style="margin-bottom:6px; font-weight:bold; color:#888; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">HÀNH ĐỘNG QUY ĐỊNH (SOAR PLAYBOOK):</div>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        ${(ruleEval.actionNameVi || '').split(' | ').map(act => {
+                            const isTrash = act.includes('Xóa') || act.includes('Thùng rác');
+                            const isSpam = act.includes('Spam') || act.includes('Vứt');
+                            const isAllow = act.includes('Tin Cậy') || act.includes('Allowlist');
+                            const borderCol = isTrash ? '#ff4757' : isSpam ? '#ffa502' : isAllow ? '#5352ed' : '#2bcbba';
+                            const bgCol = isTrash ? '#ff475715' : isSpam ? '#ffa50215' : isAllow ? '#5352ed15' : '#2bcbba15';
+                            const icon = isTrash ? '🗑️' : isSpam ? '📦' : isAllow ? '🛡️' : '⚡';
+                            return `
+                                <div style="background:${bgCol}; padding:7px 12px; border-radius:6px; border-left:3px solid ${borderCol}; color:${borderCol}; font-size:11px; font-weight:500; display:flex; align-items:center; gap:8px;">
+                                    <span>${icon}</span> <span>${escHtml(act)}</span>
+                                </div>
+                            `;
+                        }).join('')}
                     </div>
                 </div>
 
-                ${ruleEval.typosquatInfo ? `
-                    <div style="background:#ff475722; color:#ff6b81; border:1px solid #ff475744; padding:6px 10px; border-radius:4px; font-size:11px; margin-bottom:6px;">
-                        🎯 <strong>Phát hiện Typosquatting (+20đ):</strong> Chuỗi '<strong>${escHtml(ruleEval.typosquatInfo.matchedToken)}</strong>' giả mạo thương hiệu <strong>${escHtml(ruleEval.typosquatInfo.brand.toUpperCase())}</strong> (Levenshtein: ${ruleEval.typosquatInfo.distance})
-                    </div>
-                ` : ''}
 
-                ${ruleEval.isDomainNotFound ? `
-                    <div style="background:#ffa50218; color:#ffa502; border:1px solid #ffa50244; padding:6px 10px; border-radius:4px; font-size:11px; margin-bottom:6px;">
-                        ⚠️ <strong>Tên miền không tồn tại (+25đ):</strong> Không tìm thấy trong DNS/WHOIS quốc tế (No match).
-                    </div>
-                ` : ''}
 
                 <!-- 6 Modules Capped Grid -->
-                <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; font-size:10px; margin-bottom:8px;">
-                    <div style="background:#161d2d; padding:6px 10px; border-radius:4px;">Header: <strong style="color:#fff;">${ruleEval.moduleScores?.header || 0}</strong>/25đ</div>
-                    <div style="background:#161d2d; padding:6px 10px; border-radius:4px;">Domain & Typosquat: <strong style="color:#fff;">${ruleEval.moduleScores?.domainAge || 0}</strong>/45đ</div>
-                    <div style="background:#161d2d; padding:6px 10px; border-radius:4px;">AI LLM: <strong style="color:#fff;">${ruleEval.moduleScores?.llm || 0}</strong>/20đ</div>
-                    <div style="background:#161d2d; padding:6px 10px; border-radius:4px;">URL Scanner: <strong style="color:#fff;">${ruleEval.moduleScores?.url || 0}</strong>/35đ</div>
-                    <div style="background:#161d2d; padding:6px 10px; border-radius:4px;">Tệp đính kèm: <strong style="color:#fff;">${ruleEval.moduleScores?.attachment || 0}</strong>/40đ</div>
-                    <div style="background:#161d2d; padding:6px 10px; border-radius:4px;">Threat Intel: <strong style="color:#fff;">${ruleEval.moduleScores?.ioc || 0}</strong>/30đ</div>
+                <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin-bottom:10px;">
+                    ${[
+                        { key: 'header', label: 'Header Auth', max: 30, icon: '🛡️' },
+                        { key: 'domainAge', label: 'Domain & Typosquat', max: 60, icon: '🌐' },
+                        { key: 'llm', label: 'AI LLM', max: 50, icon: '🧠' },
+                        { key: 'url', label: 'URL Scanner', max: 50, icon: '🔗' },
+                        { key: 'attachment', label: 'Tệp đính kèm', max: 50, icon: '📎' },
+                        { key: 'ioc', label: 'Threat Intel', max: 50, icon: '📡' },
+                    ].map(mod => {
+                        const score = ruleEval.moduleScores?.[mod.key] || 0;
+                        const pct = Math.min(100, Math.round((score / mod.max) * 100));
+                        const hasScore = score > 0;
+                        const barColor = score >= mod.max * 0.7 ? '#ff4757' : score >= mod.max * 0.4 ? '#ffa502' : '#2ed573';
+                        const scoreColor = hasScore ? (score >= mod.max * 0.7 ? '#ff6b81' : '#ffa502') : '#ffffff';
+                        const borderStyle = hasScore ? `1px solid ${barColor}44` : '1px solid #ffffff0d';
+                        const bgStyle = hasScore ? `${barColor}0a` : '#161d2d';
+
+                        return `
+                            <div style="background:${bgStyle}; border:${borderStyle}; padding:8px 10px; border-radius:6px; display:flex; flex-direction:column; justify-content:space-between;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                                    <span style="color:#aaa; font-size:11px; display:flex; align-items:center; gap:4px;">
+                                        <span>${mod.icon}</span> <span>${mod.label}</span>
+                                    </span>
+                                    <span style="font-size:12px;">
+                                        <strong style="color:${scoreColor}; font-size:13px;">${score}</strong><span style="color:#666; font-size:10px;">/${mod.max}đ</span>
+                                    </span>
+                                </div>
+                                <div style="height:3px; background:#1e293b; border-radius:2px; overflow:hidden;">
+                                    <div style="width:${pct}%; height:100%; background:${barColor}; border-radius:2px; transition:width 0.3s ease;"></div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
                 </div>
 
                 ${ruleEval.isHardRule ? `
-                    <div style="background:#ff475722; color:#ff4757; border:1px solid #ff475744; padding:6px 10px; border-radius:4px; font-size:10px; font-weight:bold; margin-top:4px;">
+                    <div style="background:#ff475722; color:#ff4757; border:1px solid #ff475744; padding:8px 12px; border-radius:6px; font-size:11px; font-weight:bold; margin-top:6px;">
                         🚨 KÍCH HOẠT HARD RULE (100đ): ${escHtml(ruleEval.hardRuleHits?.join('; ') || '')}
                     </div>
                 ` : ''}
 
                 ${ruleEval.correlationBonuses && ruleEval.correlationBonuses.length > 0 ? `
-                    <div style="background:#ffa50218; color:#ffa502; border:1px solid #ffa50244; padding:6px 10px; border-radius:4px; font-size:10px; margin-top:4px;">
-                        ⭐ Điểm thưởng tương quan: ${ruleEval.correlationBonuses.map(b => `+${b.points}đ (${escHtml(b.rule)})`).join('; ')}
+                    <div style="background:#0f1420; border:1px solid #ffffff15; padding:10px 12px; border-radius:6px; font-size:11px; margin-top:8px;">
+                        <div style="color:#00d4ff; font-weight:bold; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                            <span>🔗</span> QUY TẮC TƯƠNG QUAN PHÁT HIỆN:
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:4px;">
+                            ${ruleEval.correlationBonuses.map(b => `<div style="font-size:11px; color:#bbb; display:flex; align-items:flex-start; gap:6px;"><span>•</span> <span>${escHtml(b.rule || b)}</span></div>`).join('')}
+                        </div>
                     </div>
                 ` : ''}
             </div>

@@ -38,14 +38,16 @@ function classifyPhishingAttack(email, allIOCs = [], ruleEvaluation = null) {
 
     // =========================================================================
     // 0. BẢO VỆ AN TOÀN (FAIL-SAFE / CLEAN VERDICT)
-    // Nếu Rule Engine đã kết luận email là CLEAN / LOW (Điểm rủi ro < 35 và không có Hard Rule)
+    // Nếu Rule Engine đã kết luận email là CLEAN (Điểm rủi ro < 25, không có Hard Rule, không có IOC độc hại và không mạo danh Brand)
     // -> Đây là Email An Toàn, tuyệt đối KHÔNG gán bất kỳ kiểu tấn công nào!
     // =========================================================================
-    const isCleanScore = (ruleEvaluation?.totalScore != null ? ruleEvaluation.totalScore < 35 : (email.overallRiskScore != null ? email.overallRiskScore < 35 : true));
-    const isCleanVerdict = ruleEvaluation?.verdict === 'CLEAN' || ruleEvaluation?.verdict === 'LOW' || email.riskLevel === 'CLEAN' || email.riskLevel === 'LOW' || (ruleEvaluation == null && (email.overallRiskScore || 0) < 35);
+    const hasAnyMaliciousIoc = allIOCs.some(i => i.verdict === 'MALICIOUS') || (email.iocAnalysis?.maliciousCount > 0);
+    const hasBrandSpoof = Boolean(ruleEvaluation?.brandSpoofInfo || ruleEvaluation?.typosquatInfo);
+    const isCleanScore = (ruleEvaluation?.totalScore != null ? ruleEvaluation.totalScore < 25 : (email.overallRiskScore != null ? email.overallRiskScore < 25 : true));
+    const isCleanVerdict = (ruleEvaluation?.verdict === 'CLEAN' || email.riskLevel === 'CLEAN') && !hasAnyMaliciousIoc && !hasBrandSpoof;
     const isNotHardRule = !ruleEvaluation?.isHardRule && (!ruleEvaluation?.hardRuleHits || ruleEvaluation.hardRuleHits.length === 0);
 
-    if (isCleanScore && isCleanVerdict && isNotHardRule) {
+    if (isCleanScore && isCleanVerdict && isNotHardRule && !hasAnyMaliciousIoc && !hasBrandSpoof) {
         return {
             id: 'BENIGN_CLEAN',
             nameVi: 'Email Hợp lệ / An Toàn (Benign / Clean Email)',
@@ -457,26 +459,39 @@ function classifyPhishingAttack(email, allIOCs = [], ruleEvaluation = null) {
     // 12. MẠO DANH THƯƠNG HIỆU UY TÍN (Brand Impersonation)
     // MITRE ATT&CK: T1566.002 (Brand Spoofing)
     // =========================================================================
-    const brandNames = ['google', 'microsoft', 'apple', 'netflix', 'paypal', 'vietcombank', 'mbbank', 'techcombank', 'evn', 'viettel', 'vnpt', 'amazon', 'dhl', 'fedex', 'vnpost'];
-    const brandMatch = brandNames.find(b => subject.includes(b) || sender.includes(b));
-    if (brandMatch || ruleEvaluation?.typosquatInfo) {
-        const brandNameDisp = ruleEvaluation?.typosquatInfo?.brand?.toUpperCase() || (brandMatch ? brandMatch.toUpperCase() : 'THƯƠNG HIỆU LỚN');
+    const brandNames = [
+        'coinbase', 'binance', 'metamask', 'kraken', 'blockchain', 'paypal', 'google', 
+        'microsoft', 'apple', 'amazon', 'netflix', 'vietcombank', 'techcombank', 'mbbank', 
+        'bidv', 'agribank', 'tpbank', 'vpbank', 'acb', 'dhl', 'fedex', 'ups', 
+        'facebook', 'instagram', 'twitter', 'telegram', 'bradesco', 'livelo', 'santander', 'itau'
+    ];
+    // Chuẩn hóa: loại bỏ khoảng trắng (để phát hiện "C o i n b a s e" -> "coinbase")
+    const cleanSender = sender.replace(/[^a-z0-9]/g, '');
+    const cleanSubject = subject.replace(/[^a-z0-9]/g, '');
+    const brandMatch = brandNames.find(b => cleanSubject.includes(b) || cleanSender.includes(b) || subject.includes(b) || sender.includes(b));
+    const brandSpoof = ruleEvaluation?.brandSpoofInfo;
+    const typosquat = ruleEvaluation?.typosquatInfo;
+
+    if (brandSpoof || typosquat || (brandMatch && (authFailed || (domainAge && domainAge < 90) || hasAnyMaliciousIoc))) {
+        const brandNameDisp = brandSpoof?.brand?.toUpperCase() || typosquat?.brand?.toUpperCase() || (brandMatch ? brandMatch.toUpperCase() : 'THƯƠNG HIỆU LỚN');
         indicators.push(`Nội dung email mạo danh tổ chức / thương hiệu lớn: '${brandNameDisp}'`);
-        if (ruleEvaluation?.typosquatInfo) indicators.push(`Phát hiện tên miền Typosquatting cố tình viết sai chính tả để lừa người dùng: ${ruleEvaluation.typosquatInfo.domain}`);
+        if (brandSpoof) indicators.push(`Tên hiển thị người gửi giả dạng '${brandSpoof.displayName}' nhưng gửi từ domain '${brandSpoof.senderDomain}'`);
+        if (typosquat) indicators.push(`Phát hiện tên miền Typosquatting cố tình viết sai chính tả để lừa người dùng: ${typosquat.domain}`);
+        if (hasAnyMaliciousIoc) indicators.push(`Phát hiện IOC độc hại được nhúng trong email mạo danh thương hiệu ${brandNameDisp}`);
 
         return {
             id: 'BRAND_IMPERSONATION',
             nameVi: `Mạo danh Thương hiệu Uy tín (${brandNameDisp} Impersonation)`,
-            severity: 'HIGH',
+            severity: (ruleEvaluation?.totalScore >= 75 || hasAnyMaliciousIoc) ? 'CRITICAL' : 'HIGH',
             icon: '🏢',
             mitre: {
                 id: 'T1566.002',
                 name: 'Spearphishing Link (Brand Spoofing)',
                 url: 'https://attack.mitre.org/techniques/T1566/002/'
             },
-            description: `Kẻ tấn công lạm dụng uy tín của thương hiệu ${brandNameDisp} nhằm tạo cảm giác tin cậy giả tạo, lừa nạn nhân tin rằng đây là thông báo hóa đơn, sự cố thanh toán hoặc cập nhật bảo mật chính thức.`,
+            description: `Kẻ tấn công lạm dụng uy tín của thương hiệu ${brandNameDisp} (sử dụng kỹ thuật ngụy tạo tên hiển thị hoặc tên miền) nhằm tạo cảm giác tin cậy giả tạo, lừa nạn nhân tin rằng đây là thông báo giao dịch, sự cố thanh toán hoặc cảnh báo bảo mật chính thức.`,
             indicators: indicators,
-            remediation: 'Kích hoạt lệnh xóa thư độc hại (di chuyển vào Thùng rác Gmail) hoặc vứt vào thư mục Spam để ngăn chặn tương tác với thương hiệu bị mạo danh.'
+            remediation: 'Kích hoạt lệnh xóa thư độc hại (di chuyển vào Thùng rác Gmail) hoặc vứt vào thư mục Spam để ngăn chặn người dùng tương tác với thư mạo danh.'
         };
     }
 
@@ -506,26 +521,54 @@ function classifyPhishingAttack(email, allIOCs = [], ruleEvaluation = null) {
     }
 
     // =========================================================================
-    // 14. LỪA ĐẢO TÀI CHÍNH / TRÚNG THƯỞNG ẢO (Advance-Fee Fraud / Scam)
+    // 14. LỪA ĐẢO TÀI CHÍNH / TIỀN MÃ HÓA (Advance-Fee Fraud / Crypto Scam)
     // MITRE ATT&CK: T1566 (Scam Phishing)
     // =========================================================================
-    const financialKeywords = ['trúng thưởng', 'xổ số', 'thừa kế', 'tiền thưởng', 'bồi thường', 'lottery', 'inheritance', 'crypto', 'bonus', 'investment'];
-    if (financialKeywords.some(k => subject.includes(k) || aiSummary.toLowerCase().includes(k))) {
-        indicators.push('Hứa hẹn tặng tiền thưởng, giải thưởng hoặc tài sản thừa kế giá trị cao');
+    const financialKeywords = [
+        'trúng thưởng', 'xổ số', 'thừa kế', 'tiền thưởng', 'bồi thường', 'lottery', 'inheritance', 
+        'crypto', 'bonus', 'investment', 'eth', 'ethereum', 'bitcoin', 'btc', 'usdt', 'wallet',
+        'you sent', 'bạn đã gửi', 'chuyển tiền'
+    ];
+    if (financialKeywords.some(k => subject.includes(k) || aiSummary.toLowerCase().includes(k) || bodyText.includes(k))) {
+        indicators.push('Nội dung thư đề cập đến giao dịch tài sản / tiền mã hóa (Crypto) hoặc khoản tiền bất thường');
+        if (subject.includes('eth') || subject.includes('bitcoin') || subject.includes('sent')) {
+            indicators.push('Tạo thông báo chuyển tiền giả mạo nhằm gieo rắc sự hoang mang (Panic Scam) thúc giục nạn nhân bấm link');
+        }
 
         return {
             id: 'FINANCIAL_SCAM',
-            nameVi: 'Lừa đảo Tài chính / Tiền thưởng Ảo (Financial Scam / Advance-Fee Fraud)',
-            severity: 'MEDIUM',
+            nameVi: 'Lừa đảo Giao dịch Tài chính / Tiền mã hóa (Financial Scam / Crypto Phishing)',
+            severity: hasAnyMaliciousIoc ? 'CRITICAL' : 'HIGH',
             icon: '💰',
             mitre: {
                 id: 'T1566',
-                name: 'Phishing',
+                name: 'Phishing: Financial Fraud & Fake Transaction',
                 url: 'https://attack.mitre.org/techniques/T1566/'
             },
-            description: 'Mô hình lừa đảo kinh điển (như thư lừa đảo kiểu Nigeria / 419 Scam), đánh vào lòng tham hoặc sự ngây thơ bằng cách thông báo nạn nhân được nhận một khoản tiền khổng lồ, nhưng yêu cầu nộp một khoản phí nhỏ để làm thủ tục.',
+            description: 'Kẻ tấn công gửi thông báo giao dịch chuyển tiền mã hóa (hoặc phần thưởng tài chính) giả mạo nhằm đánh vào tâm lý hoang mang sợ bị mất tiền của người nhận, dụ dỗ nạn nhân liên hệ hotline hoặc bấm vào liên kết xác nhận để đánh cắp ví/tài khoản.',
             indicators: indicators,
             remediation: 'Vứt thư vào thư mục Spam của Gmail hoặc xóa vào Thùng rác để loại bỏ triệt để email lừa đảo khỏi Hộp thư đến.'
+        };
+    }
+
+    // =========================================================================
+    // 14.5. PHÁT TÁN LIÊN KẾT & HẠ TẦNG ĐỘC HẠI (Malicious Infrastructure Delivery)
+    // MITRE ATT&CK: T1566.002 (Spearphishing Link)
+    // =========================================================================
+    if (hasAnyMaliciousIoc || maliciousUrlFound) {
+        return {
+            id: 'MALICIOUS_IOC_DELIVERY',
+            nameVi: 'Phát tán Liên kết & Hạ tầng Độc hại (Malicious Link / IOC Delivery)',
+            severity: 'CRITICAL',
+            icon: '☣️',
+            mitre: {
+                id: 'T1566.002',
+                name: 'Spearphishing Link: Malicious Infrastructure',
+                url: 'https://attack.mitre.org/techniques/T1566/002/'
+            },
+            description: 'Email chứa các liên kết, địa chỉ IP hoặc tên miền đã bị các hệ thống Tình báo Đe dọa Toàn cầu (VirusTotal, URLhaus, AbuseIPDB) xác nhận là hạ tầng độc hại hoặc máy chủ lưu trữ mã độc/lừa đảo.',
+            indicators: indicators.length > 0 ? indicators : ['Phát hiện chỉ số IOC độc hại trong email'],
+            remediation: 'Kích hoạt lệnh xóa thư độc hại ngay lập tức (di chuyển vào Thùng rác Gmail) và cập nhật danh sách chặn tường lửa pfSense/Wazuh EDR.'
         };
     }
 
@@ -552,8 +595,27 @@ function classifyPhishingAttack(email, allIOCs = [], ruleEvaluation = null) {
     }
 
     // =========================================================================
-    // 16. THƯ AN TOÀN / RỦI RO THẤP (Benign / Clean Email)
+    // 16. THƯ CÓ BẤT THƯỜNG HOẶC AN TOÀN
     // =========================================================================
+    const totalScoreVal = ruleEvaluation?.totalScore ?? (email.overallRiskScore || 0);
+    if (totalScoreVal >= 25 || ruleEvaluation?.verdict === 'SUSPICIOUS' || ruleEvaluation?.verdict === 'MALICIOUS' || ruleEvaluation?.verdict === 'LOW') {
+        indicators.push(`Điểm đánh giá Rule Engine: ${totalScoreVal}/100đ (${ruleEvaluation?.verdict || 'SUSPICIOUS'})`);
+        return {
+            id: 'SUSPICIOUS_ANOMALY',
+            nameVi: 'Email Bất Thường Kỹ Thuật & Nghi Vấn (Suspicious Security Anomalies)',
+            severity: totalScoreVal >= 75 ? 'CRITICAL' : (totalScoreVal >= 50 ? 'HIGH' : 'MEDIUM'),
+            icon: '⚠️',
+            mitre: {
+                id: 'T1566',
+                name: 'Phishing: Technical Anomalies',
+                url: 'https://attack.mitre.org/techniques/T1566/'
+            },
+            description: 'Email có nhiều chỉ số kỹ thuật bất thường (DMARC/SPF thất bại, bất thường cấu trúc hoặc chỉ số rủi ro vượt ngưỡng an toàn).',
+            indicators: indicators.length > 0 ? indicators : ['Phát hiện bất thường kỹ thuật trong cấu trúc email'],
+            remediation: ruleEvaluation?.actionNameVi || 'Vứt thư vào thư mục Spam của Gmail để cách ly kiểm tra an toàn.'
+        };
+    }
+
     return {
         id: 'BENIGN_CLEAN',
         nameVi: 'Email Hợp lệ / An Toàn (Benign / Clean Email)',

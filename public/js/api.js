@@ -41,6 +41,30 @@ async function collectEmails() {
 }
 
 /**
+ * Đồng bộ kết quả đánh giá Rule Engine & cập nhật toàn bộ Dashboard tức thì
+ */
+function syncEvaluationAndUI(id, data) {
+    const idx = emails.findIndex(e => e._id === id);
+    if (idx >= 0 && data) {
+        if (data.ruleEvaluation) {
+            emails[idx].ruleEvaluation = data.ruleEvaluation;
+            emails[idx].overallRiskScore = data.overallRiskScore ?? data.ruleEvaluation.totalScore;
+            emails[idx].riskLevel = data.riskLevel ?? data.ruleEvaluation.verdict;
+            emails[idx].riskScore = emails[idx].overallRiskScore;
+            emails[idx].responseActions = data.responseActions || data.ruleEvaluation.playbookActions || [];
+        }
+        if (selectedId === id) {
+            const respSection = document.getElementById('response-reporting-section');
+            if (respSection) {
+                respSection.innerHTML = renderResponseSection(emails[idx]);
+            }
+        }
+        renderList();
+        updateStats();
+    }
+}
+
+/**
  * Phân tích Header: SPF, DKIM, DMARC, Domain Age, Received Chain
  */
 async function analyzeHeader(id) {
@@ -60,11 +84,8 @@ async function analyzeHeader(id) {
             const idx = emails.findIndex(e => e._id === id);
             if (idx >= 0) {
                 emails[idx].headerAnalysis = data.data;
-                emails[idx].riskScore = data.data.risk_score;
-                emails[idx].riskLevel = data.data.risk_level;
             }
-            renderList();
-            updateStats();
+            syncEvaluationAndUI(id, data);
         } else {
             section.innerHTML = `<div class="no-analysis">❌ Lỗi: ${data.error}</div>`;
         }
@@ -96,7 +117,7 @@ async function analyzeContent(id) {
                 emails[idx].socialEngineeringScore = data.data.ai_analysis?.data?.social_engineering_score;
                 emails[idx].contentVerdict = data.data.ai_analysis?.data?.verdict;
             }
-            renderList();
+            syncEvaluationAndUI(id, data);
         } else {
             section.innerHTML = `<div class="card" style="border-left: 3px solid #ff4757; color: #ff6b6b;">❌ Lỗi AI: ${data.error}</div>`;
         }
@@ -124,6 +145,7 @@ async function analyzeUrls(id) {
             section.innerHTML = renderUrlAnalysis(data.data);
             const idx = emails.findIndex(e => e._id === id);
             if (idx >= 0) emails[idx].urlAnalysis = data.data;
+            syncEvaluationAndUI(id, data);
         } else {
             section.innerHTML = `<div class="card" style="border-left:3px solid #ff4757; color:#ff6b6b;">❌ Lỗi URL scanner: ${data.error}</div>`;
         }
@@ -151,6 +173,7 @@ async function analyzeAttachments(id) {
             section.innerHTML = renderAttachmentAnalysis(data.data);
             const idx = emails.findIndex(e => e._id === id);
             if (idx >= 0) emails[idx].attachmentAnalysis = data.data;
+            syncEvaluationAndUI(id, data);
         } else {
             section.innerHTML = `<div class="card" style="border-left:3px solid #ff4757; color:#ff6b6b;">❌ Lỗi phân tích file đính kèm: ${data.error}</div>`;
         }
@@ -178,6 +201,7 @@ async function analyzeIOC(id) {
             section.innerHTML = renderIOCAnalysis(data.data);
             const idx = emails.findIndex(e => e._id === id);
             if (idx >= 0) emails[idx].iocAnalysis = data.data;
+            syncEvaluationAndUI(id, data);
         } else {
             section.innerHTML = `<div class="card" style="border-left:3px solid #ff4757; color:#ff6b6b;">❌ Lỗi làm rõ IOC: ${data.error}</div>`;
         }

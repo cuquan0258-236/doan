@@ -152,10 +152,14 @@ async function buildIncidentData(emailId) {
         riskAssessment: {
             overallScore: overallScore,
             severity: overallLevel,
-            verdict: overallScore >= 75 ? 'MALICIOUS' : (overallScore >= 50 ? 'SUSPICIOUS' : 'SAFE'),
-            summary: overallScore >= 50 
-                ? 'Phát hiện email có mức độ nguy hiểm cao với dấu hiệu lừa đảo mạo danh, liên kết độc hại hoặc đòn tâm lý khẩn cấp.'
-                : 'Email nằm trong ngưỡng an toàn hoặc có độ rủi ro thấp.'
+            verdict: ruleEvaluation.verdict || (overallScore >= 75 ? 'MALICIOUS' : (overallScore >= 50 ? 'SUSPICIOUS' : (overallScore >= 25 ? 'LOW' : 'CLEAN'))),
+            summary: overallScore >= 75 
+                ? 'Phát hiện email có mức độ nguy hiểm cao với dấu hiệu lừa đảo mạo danh, liên kết độc hại đã xác thực hoặc kỹ thuật né tránh kiểm duyệt.'
+                : overallScore >= 50
+                ? 'Email có nhiều dấu hiệu nghi vấn và chỉ số rủi ro vượt ngưỡng an toàn, hệ thống tự động cách ly vào Spam.'
+                : overallScore >= 25
+                ? 'Email có một số chỉ số kỹ thuật bất thường ở mức độ thấp, cần lưu ý.'
+                : 'Email hoàn toàn nằm trong ngưỡng an toàn.'
         },
         threatClassification: threatClassification,
         ruleEvaluation: ruleEvaluation,

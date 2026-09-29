@@ -21,6 +21,7 @@ function riskColor(level) {
     if (level === 'LOW') return '#eccc68';
     if (level === 'CLEAN') return '#2ed573';
     if (level === 'INCONCLUSIVE') return '#70a1ff';
+    if (level === 'UNANALYZED' || level === 'PENDING') return '#a4b0be';
     return '#888';
 }
 

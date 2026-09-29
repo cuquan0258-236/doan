@@ -386,8 +386,21 @@ def assess_url_risk(url, redirect_result, urlscan_result=None):
 
     # ---- Phân tích Redirect Chain ----
     if redirect_result.get('domain_changed'):
-        score += 20
-        flags.append(f"🔴 Domain thay đổi sau redirect: {redirect_result['initial_domain']} → {redirect_result['final_domain']}")
+        initial_d = redirect_result.get('initial_domain', '').lower()
+        final_d = redirect_result.get('final_domain', '').lower()
+        
+        initial_root = '.'.join(initial_d.split('.')[-2:]) if '.' in initial_d else initial_d
+        final_root = '.'.join(final_d.split('.')[-2:]) if '.' in final_d else final_d
+        
+        is_same_root = (initial_root == final_root) and bool(initial_root)
+        is_google_eco = any(g in initial_d for g in ['google.', 'googleapis.']) and any(g in final_d for g in ['google.', 'googleapis.'])
+        is_ms_eco = any(m in initial_d for m in ['microsoft.', 'office.', 'live.', 'bing.']) and any(m in final_d for m in ['microsoft.', 'office.', 'live.', 'bing.'])
+
+        if is_same_root or is_google_eco or is_ms_eco:
+            flags.append(f"ℹ️ Chuyển hướng nội bộ dịch vụ chính thức: {redirect_result['initial_domain']} → {redirect_result['final_domain']}")
+        else:
+            score += 20
+            flags.append(f"🔴 Domain thay đổi sau redirect: {redirect_result['initial_domain']} → {redirect_result['final_domain']}")
 
     if redirect_result.get('total_redirects', 0) > 3:
         score += 15

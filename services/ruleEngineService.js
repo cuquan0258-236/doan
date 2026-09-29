@@ -28,7 +28,8 @@ const COMMONLY_SPOOFED_BRANDS = [
     'instagram', 'chase', 'wellsfargo', 'bankofamerica', 'citibank', 'dhl',
     'fedex', 'ups', 'adobe', 'dropbox', 'linkedin', 'twitter', 'telegram',
     'binance', 'coinbase', 'metamask', 'vietcombank', 'techcombank', 'mbbank',
-    'bidv', 'agribank', 'tpbank', 'vpbank', 'acb', 'outlook', 'office365'
+    'bidv', 'agribank', 'tpbank', 'vpbank', 'acb', 'outlook', 'office365',
+    'bradesco', 'livelo', 'santander', 'itau', 'ftx', 'mashreq'
 ];
 
 /**
@@ -81,6 +82,41 @@ function detectTyposquatting(domain) {
                     matchedToken: token,
                     distance: dist,
                     domain
+                };
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * Phát hiện Giả mạo Tên hiển thị Thương hiệu (Display Name Brand Impersonation)
+ * Chuẩn hóa loại bỏ khoảng trắng, dấu gạch ngang (ví dụ "C o i n b a s e" -> "coinbase")
+ */
+function detectBrandSpoofing(sender, senderDomain) {
+    if (!sender) return null;
+    let displayName = sender;
+    if (sender.includes('<')) {
+        displayName = sender.split('<')[0].replace(/['"]/g, '').trim();
+    }
+    if (!displayName) return null;
+
+    // Chuẩn hóa: loại bỏ khoảng trắng và ký tự đặc biệt (chống bypass kỹ thuật chen khoảng trắng)
+    const normalizedName = displayName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!normalizedName || normalizedName.length < 3) return null;
+
+    const domain = (senderDomain || '').toLowerCase().replace(/:\d+$/, '').trim();
+
+    for (const brand of COMMONLY_SPOOFED_BRANDS) {
+        if (normalizedName.includes(brand) || levenshteinDistance(normalizedName, brand) <= 1) {
+            // Kiểm tra xem tên miền gửi thực tế có chứa thương hiệu được bảo vệ không
+            const isLegitBrandDomain = domain.includes(brand);
+            if (!isLegitBrandDomain) {
+                return {
+                    brand,
+                    displayName,
+                    normalizedName,
+                    senderDomain: domain
                 };
             }
         }
@@ -174,6 +210,30 @@ function evaluateEmail(email) {
     const failSafeNotes = [];
     let moduleErrorCount = 0;
 
+    const hasAnyAnalysis = Boolean(
+        email.headerAnalysis || 
+        email.contentAnalysis || 
+        email.urlAnalysis || 
+        email.attachmentAnalysis || 
+        email.iocAnalysis
+    );
+
+    if (!hasAnyAnalysis) {
+        return {
+            totalScore: null,
+            verdict: 'UNANALYZED',
+            action: 'NONE',
+            actionNameVi: 'Chưa phân tích (Chờ kích hoạt)',
+            isHardRule: false,
+            hardRuleHits: [],
+            moduleScores,
+            correlationBonuses: [],
+            playbookActions: [],
+            failSafeNotes: ['Email chưa thực hiện bất kỳ phân tích nào (Header, AI, URL, Attachment, IOC).'],
+            evaluatedAt: new Date().toISOString()
+        };
+    }
+
     const sender = (email.sender || '').toLowerCase();
     const isAllowlisted = SENDER_ALLOWLIST.some(allowed => sender.includes(allowed.toLowerCase()));
 
@@ -235,44 +295,46 @@ function evaluateEmail(email) {
         }
     }
 
-    // NẾU CÓ HARD RULE -> NGẮT MẠCH NGAY VỚI 100 ĐIỂM
-    if (hardRuleHits.length > 0) {
-        const action = isAllowlisted ? 'LOG_ALLOWLISTED' : 'DELETE_TO_TRASH';
-        const actionNameVi = isAllowlisted 
-            ? 'Người gửi Tin Cậy (Chỉ Gắn Nhãn / Giữ trong Inbox)' 
-            : 'Xóa thư độc hại (Chuyển vào Thùng rác Gmail)';
-        const playbookActions = isAllowlisted ? [] : generatePlaybookActions(email, 'MALICIOUS', { totalScore: 100, isHardRule: true, hardRuleHits });
-        return {
-            totalScore: 100,
-            verdict: 'MALICIOUS',
-            action: action,
-            actionNameVi: actionNameVi,
-            isHardRule: true,
-            hardRuleHits: hardRuleHits,
-            moduleScores: { header: 25, domainAge: 20, llm: 20, url: 35, attachment: 40, ioc: 30 },
-            correlationBonuses: [],
-            failSafeNotes: isAllowlisted ? ['Người gửi nằm trong Allowlist: Bỏ qua hành động tự xóa'] : [],
-            playbookActions: playbookActions,
-            evaluatedAt: new Date().toISOString()
-        };
-    }
+    // Hard Rule đã ghi nhận trong hardRuleHits. Tiếp tục tính toán điểm thực tế
+    // của từng module để phản ánh chính xác cấu trúc email (không gán bừa điểm tệp đính kèm).
 
     // ========================================================
     // PHẦN 2: CHẤM ĐIỂM MỀM (CÓ TRẦN CHO MỖI MODULE)
     // ========================================================
 
     // 2.1. Module Header (Trần: 25 điểm)
-    // DMARC fail +15, DMARC none +15, SPF fail +8, DKIM fail +5, DKIM none +5, Reply-To/Return-Path lệch +7
+    // DMARC fail +15, DMARC none +15, SPF fail +15, DKIM fail +10, DKIM none +5, Reply-To/Return-Path lệch +7, Domain Mismatch +15
+    const senderEmail = (email.sender || '').toLowerCase();
+    const senderDomainFromEmail = senderEmail.includes('@') ? senderEmail.split('@').pop().replace(/[<>]/g, '').trim() : '';
+    const domainFromAnalysis = (email.headerAnalysis?.domain_analysis?.sender_domain || '').toLowerCase().trim();
+    const testDomain = senderDomainFromEmail || domainFromAnalysis;
+    const anomalies = email.headerAnalysis?.anomalies || [];
+
     let rawHeader = 0;
     if (dmarcStatus === 'fail' || dmarcStatus === 'none') rawHeader += 15;
-    if (spfStatus === 'fail' || spfStatus === 'softfail') rawHeader += 8;
+    if (spfStatus === 'fail' || spfStatus === 'softfail') rawHeader += 15;
     const dkimStatus = (headerAuth.dkim?.status || headerAuth.dkim || '').toLowerCase();
-    if (dkimStatus === 'fail' || dkimStatus === 'none') rawHeader += 5;
+    if (dkimStatus === 'fail') rawHeader += 10;
+    else if (dkimStatus === 'none') rawHeader += 5;
 
     const headers = email.headerAnalysis?.headers || {};
     if (headers.reply_to && headers.return_path && headers.reply_to.toLowerCase() !== headers.return_path.toLowerCase()) {
         rawHeader += 7;
     }
+
+    // Kiểm tra DOMAIN_MISMATCH từ anomaly header hoặc căn chỉnh định danh DMARC Alignment
+    if (anomalies.some(a => a.type === 'DOMAIN_MISMATCH')) {
+        rawHeader += 15;
+    } else if (testDomain) {
+        const spfDom = (headerAuth.spf?.domain || '').toLowerCase();
+        const dkimDom = (headerAuth.dkim?.domain || '').toLowerCase();
+        const dmarcDom = (headerAuth.dmarc?.domain || '').toLowerCase();
+        const isAligned = (spfDom && testDomain.endsWith(spfDom)) || (dkimDom && testDomain.endsWith(dkimDom)) || (dmarcDom && testDomain.endsWith(dmarcDom));
+        if (!isAligned && (spfDom || dkimDom || dmarcDom)) {
+            rawHeader += 15; // Phá vỡ căn chỉnh định danh (SPF/DKIM/DMARC Alignment Failure)
+        }
+    }
+
     moduleScores.header = Math.min(25, rawHeader);
 
     // 2.2. Module Domain & Brand Validation (Trần: 45 điểm)
@@ -281,14 +343,13 @@ function evaluateEmail(email) {
     // - Tuổi domain: <7 ngày +20, <30 ngày +12, <90 ngày +6
     let rawDomain = 0;
 
-    // A. Kiểm tra Domain không tồn tại (DNS + WHOIS xác nhận)
+    // A. Kiểm tra Domain không tồn tại hoặc không hợp lệ (DNS + WHOIS xác nhận)
     let isDomainNotFound = false;
-    const anomalies = email.headerAnalysis?.anomalies || [];
-    if (anomalies.some(a => a.type === 'DOMAIN_NOT_FOUND' || (a.detail && (a.detail.includes('không tồn tại') || a.detail.includes('No match'))))) {
+    if (anomalies.some(a => a.type === 'DOMAIN_NOT_FOUND' || a.type === 'INVALID_DOMAIN' || (a.detail && (a.detail.includes('không tồn tại') || a.detail.includes('No match') || a.detail.includes('không hợp lệ'))))) {
         isDomainNotFound = true;
     }
     const whoisErr = (email.headerAnalysis?.domain_analysis?.error || '').toLowerCase();
-    if (whoisErr.includes('no match') || whoisErr.includes('not found') || whoisErr.includes('nxdomain') || whoisErr.includes('could not resolve')) {
+    if (whoisErr.includes('no match') || whoisErr.includes('not found') || whoisErr.includes('nxdomain') || whoisErr.includes('could not resolve') || whoisErr.includes('no output') || whoisErr.includes('không hợp lệ')) {
         isDomainNotFound = true;
     }
     const urlChain = email.urlAnalysis?.urls || [];
@@ -296,19 +357,24 @@ function evaluateEmail(email) {
         isDomainNotFound = true;
     }
 
+    // Kiểm tra domain không có chấm (non-FQDN như 'pot')
+    if (testDomain && !testDomain.includes('.')) {
+        isDomainNotFound = true;
+    }
+
     if (isDomainNotFound) {
         rawDomain += 25;
     }
 
-    // B. Kiểm tra Typosquatting / Giả mạo thương hiệu (khoảng cách Levenshtein <= 2)
-    const senderEmail = (email.sender || '').toLowerCase();
-    const senderDomainFromEmail = senderEmail.includes('@') ? senderEmail.split('@')[1].replace(/[<>]/g, '').trim() : '';
-    const domainFromAnalysis = (email.headerAnalysis?.domain_analysis?.sender_domain || '').toLowerCase().trim();
-    const testDomain = senderDomainFromEmail || domainFromAnalysis;
-
     const typosquatInfo = detectTyposquatting(testDomain) || detectTyposquatting(domainFromAnalysis);
     if (typosquatInfo) {
         rawDomain += 20;
+    }
+
+    // B2. Phát hiện Giả mạo Tên hiển thị Thương hiệu (ví dụ: "C o i n b a s e <noreply@firesonic.ca>")
+    const brandSpoofInfo = detectBrandSpoofing(email.sender, testDomain);
+    if (brandSpoofInfo) {
+        rawDomain += 25;
     }
 
     // C. Tuổi domain (Domain Age)
@@ -322,20 +388,40 @@ function evaluateEmail(email) {
     }
     moduleScores.domainAge = Math.min(45, rawDomain);
 
-    // 2.3. Module Nội dung LLM (Trần: 20 điểm)
-    // Mỗi đòn tâm lý +5, ép chuyển tiền/xin OTP +8
+    // 2.3. Module Nội dung LLM (Trần: 35 điểm)
+    // AI Verdict: PHISHING +15, SUSPICIOUS +8
+    // Social Engineering Score: >=70 +12, >=50 +8
+    // Mỗi đòn tâm lý +5, ép chuyển tiền/xin OTP/tài chính +8
     let rawLlm = 0;
     const tactics = email.contentAnalysis?.ai_analysis?.data?.tactics || email.contentAnalysis?.tactics || [];
     rawLlm += tactics.length * 5;
 
     const contentSummary = (email.contentAnalysis?.clean_body || email.contentAnalysis?.summary || '').toLowerCase();
     const subject = (email.subject || '').toLowerCase();
-    if (contentSummary.includes('chuyển tiền') || contentSummary.includes('otp') || contentSummary.includes('mật khẩu') || contentSummary.includes('bảng lương') ||
-        subject.includes('chuyển tiền') || subject.includes('otp') || subject.includes('mật khẩu') || subject.includes('bảng lương')) {
+
+    // Tính điểm trực tiếp từ AI Verdict
+    const aiVerdictRaw = (email.contentAnalysis?.ai_analysis?.data?.verdict || email.contentAnalysis?.contentVerdict || email.contentVerdict || '').toUpperCase();
+    if (aiVerdictRaw === 'PHISHING') rawLlm += 15;
+    else if (aiVerdictRaw === 'SUSPICIOUS') rawLlm += 8;
+
+    // Tính điểm từ Social Engineering Score
+    const seScoreRaw = (email.socialEngineeringScore || email.contentAnalysis?.ai_analysis?.data?.social_engineering_score || 0);
+    if (seScoreRaw >= 70) rawLlm += 12;
+    else if (seScoreRaw >= 50) rawLlm += 8;
+
+    // Từ khóa tài chính / lừa đảo
+    const financialScamKeywords = [
+        'chuyển tiền', 'otp', 'mật khẩu', 'bảng lương',
+        'withdraw', 'authorized', 'claim your', 'reward', 'prize',
+        'investment', 'trading', 'your account', 'verify your', 'confirm your',
+        'suspended', 'locked', 'expire', 'expiring'
+    ];
+    if (financialScamKeywords.some(k => contentSummary.includes(k) || subject.includes(k))) {
         rawLlm += 8;
     }
+
     if (email.contentAnalysis?.ai_analysis?.success === false) moduleErrorCount += 1;
-    moduleScores.llm = Math.min(20, rawLlm);
+    moduleScores.llm = Math.min(35, rawLlm);
 
     // 2.4. Module URL (Trần: 35 điểm)
     // Redirect >3 bước +5, href lệch +8, punycode +10, form đăng nhập trên domain mới +15
@@ -369,59 +455,228 @@ function evaluateEmail(email) {
     moduleScores.attachment = Math.min(40, rawAtt);
 
     // 2.6. Module IOC Intel (Trần: 30 điểm)
-    // AbuseIPDB >= 75 +15, VT >= 3 engine +20
+    // AbuseIPDB >= 75 +15, VT >= 2 engine hoặc verdict MALICIOUS +25, VT >= 1 engine +15
     let rawIoc = 0;
     iocs.forEach(item => {
         const abuseScore = item.abuseConfidenceScore || item.sources?.abuseipdb?.abuseConfidenceScore || 0;
         if (abuseScore >= 75) rawIoc += 15;
         const vtCount = item.positives || item.sources?.virustotal?.maliciousCount || (item.threatIntel?.virustotal?.malicious) || 0;
-        if (vtCount >= 3 || item.reputationScore >= 75 || item.verdict === 'MALICIOUS') rawIoc += 20;
+        if (vtCount >= 2 || item.reputationScore >= 75 || item.verdict === 'MALICIOUS') {
+            rawIoc += 25;
+        } else if (vtCount >= 1 || item.verdict === 'SUSPICIOUS') {
+            rawIoc += 15;
+        }
     });
     if (email.iocAnalysis?.error) moduleErrorCount += 1;
     moduleScores.ioc = Math.min(30, rawIoc);
 
     // ========================================================
-    // PHẦN 3: BONUS TƯƠNG QUAN (CORRELATION RULES)
+    // PHẦN 3: QUY TẮC TƯƠNG QUAN NGẦM (CORRELATION RULES)
+    // Các quy tắc liên kết chéo hoạt động ngầm để đẩy điểm các
+    // module tương ứng lên mức trần tối đa, không cộng điểm rời rạc.
     // ========================================================
 
-    // 3.1. DMARC fail + domain mới (<30 ngày) + xin đăng nhập (+15đ)
+    // 3.1. DMARC fail + domain mới (<30 ngày) + xin đăng nhập
     const hasLoginRequest = urls.some(u => ['login', 'signin', 'verify'].some(k => (u.url || '').toLowerCase().includes(k))) ||
                             subject.includes('mật khẩu') || subject.includes('xác minh');
     if (dmarcStatus === 'fail' && typeof domainAge === 'number' && domainAge < 30 && hasLoginRequest) {
+        rawHeader += 10;
+        rawUrl += 15;
         correlationBonuses.push({
-            rule: 'DMARC Fail + Domain Mới (<30 ngày) + Yêu cầu Đăng nhập',
-            points: 15
+            rule: 'DMARC Fail + Domain Mới (<30 ngày) + Yêu cầu Đăng nhập'
         });
     }
 
-    // 3.2. Urgency + link domain mới (<30 ngày) (+10đ)
+    // 3.2. Urgency + link domain mới (<30 ngày)
     const hasUrgency = tactics.includes('Urgency') || subject.includes('khẩn cấp') || subject.includes('urgent') ||
                        Boolean(email.contentAnalysis?.keywords_detected?.['Urgency (Khẩn cấp)']);
     const hasNewDomainLink = typeof domainAge === 'number' && domainAge < 30 && urls.length > 0;
     if (hasUrgency && hasNewDomainLink) {
+        rawLlm += 10;
+        rawUrl += 10;
         correlationBonuses.push({
-            rule: 'Đòn tâm lý Khẩn cấp (Urgency) + Liên kết trỏ về Domain Mới (<30 ngày)',
-            points: 10
+            rule: 'Đòn tâm lý Khẩn cấp (Urgency) + Liên kết trỏ về Domain Mới (<30 ngày)'
         });
     }
 
-    // 3.3. Typosquat brand + DMARC/DKIM none/fail + domain không tồn tại/mới (+15đ)
+    // 3.3. Typosquat brand + DMARC/DKIM none/fail + domain không tồn tại/mới
     const hasTyposquat = Boolean(typosquatInfo);
+    const hasBrandSpoof = Boolean(brandSpoofInfo);
     const hasDmarcOrDkimNoneOrFail = (dmarcStatus === 'none' || dmarcStatus === 'fail' || dkimStatus === 'none' || dkimStatus === 'fail');
     const hasDomainNonExistentOrNew = (isDomainNotFound || (typeof domainAge === 'number' && domainAge < 30));
 
     if (hasTyposquat && hasDmarcOrDkimNoneOrFail && hasDomainNonExistentOrNew) {
+        rawDomain += 20;
+        rawHeader += 10;
         correlationBonuses.push({
-            rule: `Typosquatting Brand (${typosquatInfo.brand.toUpperCase()}) + DMARC/DKIM None/Fail + Domain Không Tồn Tại hoặc Mới (<30 ngày)`,
-            points: 15
+            rule: `Typosquatting Brand (${typosquatInfo.brand.toUpperCase()}) + Trượt DMARC/DKIM + Domain Mới/Không tồn tại`
         });
     }
 
-    // TỔNG ĐIỂM
-    const baseSoftScore = moduleScores.header + moduleScores.domainAge + moduleScores.llm + 
-                          moduleScores.url + moduleScores.attachment + moduleScores.ioc;
-    const bonusScore = correlationBonuses.reduce((acc, b) => acc + b.points, 0);
-    let totalScore = Math.min(100, baseSoftScore + bonusScore);
+    // 3.4. Giả mạo Tên hiển thị Thương hiệu + Trượt DMARC/SPF
+    if (hasBrandSpoof && (hasDmarcOrDkimNoneOrFail || spfStatus === 'fail' || spfStatus === 'softfail')) {
+        rawDomain += 20;
+        rawHeader += 15;
+        correlationBonuses.push({
+            rule: `Giả mạo Tên hiển thị Thương hiệu (${brandSpoofInfo.brand.toUpperCase()}) + Trượt DMARC/SPF`
+        });
+    }
+
+    // 3.5. IOC Độc hại đã xác thực + Mạo danh Brand / DMARC Bất thường
+    const hasMaliciousIoc = iocs.some(i => i.verdict === 'MALICIOUS' || (i.sources?.virustotal?.maliciousCount || 0) >= 2 || (i.positives || 0) >= 2 || (i.reputationScore || 0) >= 75);
+    if (hasMaliciousIoc && (hasBrandSpoof || hasTyposquat || hasDmarcOrDkimNoneOrFail || isDomainNotFound)) {
+        rawIoc += 15;
+        rawDomain += 15;
+        correlationBonuses.push({
+            rule: 'IOC Độc hại đã xác thực (VirusTotal/Threat Intel) + Mạo danh Brand hoặc DMARC Bất thường'
+        });
+    }
+
+    // 3.6. Cảnh báo giao dịch Crypto / Sàn tiền mã hóa lừa đảo + Người gửi bất thường
+    const cryptoKeywords = ['eth', 'ethereum', 'bitcoin', 'btc', 'usdt', 'crypto', 'wallet', 'coinbase', 'binance', 'metamask', 'ftx', 'withdraw', 'trading platform'];
+    const isCryptoAlert = cryptoKeywords.some(k => subject.includes(k) || contentSummary.includes(k));
+    const hasDomainMismatchAnomaly = anomalies.some(a => a.type === 'DOMAIN_MISMATCH');
+    if (isCryptoAlert && (hasBrandSpoof || hasDmarcOrDkimNoneOrFail || hasMaliciousIoc || hasDomainMismatchAnomaly || isDomainNotFound)) {
+        rawLlm += 15;
+        rawDomain += 15;
+        correlationBonuses.push({
+            rule: 'Thông báo Giao dịch / Rút tiền từ Sàn tiền mã hóa (Crypto/FTX Scam) + Người gửi bất thường'
+        });
+    }
+
+    // 3.7. Xác thực Máy chủ gửi Bất thường + AI phát hiện Phishing / Lừa đảo
+    const hasAuthAnomaly = (spfStatus === 'fail' || spfStatus === 'softfail' || dmarcStatus === 'fail' || dmarcStatus === 'none');
+    const aiVerdict = (email.contentAnalysis?.ai_analysis?.data?.verdict || email.contentAnalysis?.contentVerdict || '').toUpperCase();
+    const seScore = (email.socialEngineeringScore || email.contentAnalysis?.ai_analysis?.data?.social_engineering_score || 0);
+    const isAiPhishing = (aiVerdict === 'PHISHING' || aiVerdict === 'SUSPICIOUS' || seScore >= 60 || tactics.length > 0);
+
+    if (hasAuthAnomaly && isAiPhishing) {
+        rawHeader += 15;
+        rawLlm += 15;
+        correlationBonuses.push({
+            rule: `Xác thực máy chủ gửi bất thường + AI phát hiện Dấu hiệu Phishing/Thao túng`
+        });
+    }
+
+    // 3.8. Tên miền không tồn tại trong DNS/WHOIS (NXDOMAIN) + Trượt xác thực SPF/DKIM/DMARC
+    if (isDomainNotFound && hasDmarcOrDkimNoneOrFail) {
+        rawDomain += 20;
+        rawHeader += 10;
+        correlationBonuses.push({
+            rule: 'Tên miền không tồn tại trong DNS/WHOIS (NXDOMAIN) + Trượt xác thực SPF/DKIM/DMARC'
+        });
+    }
+
+    // 3.9. Tên miền người gửi không tồn tại/không hợp lệ + AI phát hiện Phishing
+    if (isDomainNotFound && (isAiPhishing || aiVerdict === 'PHISHING' || seScore >= 60)) {
+        rawDomain += 25;
+        rawLlm += 20;
+        correlationBonuses.push({
+            rule: `Tên miền người gửi không tồn tại/không hợp lệ (${testDomain || 'Không xác định'}) + AI phát hiện Phishing`
+        });
+    }
+
+    // 3.10. Mạo danh Cảnh báo Khóa tài khoản Ngân hàng (Bank Account Blocked Scam)
+    const bankScamKeywords = ['bank account', 'account has been blocked', 'unusual activities', 'tài khoản bị khóa', 'hoạt động bất thường', 'bloqueada', 'desbloqueio', 'cuenta bloqueada'];
+    const isBankScam = bankScamKeywords.some(k => subject.includes(k) || contentSummary.includes(k));
+    if (isBankScam && (isDomainNotFound || hasBrandSpoof || hasAuthAnomaly || anomalies.length > 0)) {
+        rawLlm += 15;
+        rawDomain += 15;
+        correlationBonuses.push({
+            rule: 'Mạo danh Cảnh báo Khóa tài khoản Ngân hàng (Bank Account Blocked Scam) + Bất thường tên miền/người gửi'
+        });
+    }
+
+    // 3.11. AI phát hiện Phishing/Lừa đảo + Lệch tên miền (Domain Mismatch)
+    if (isAiPhishing && hasDomainMismatchAnomaly) {
+        rawHeader += 15;
+        rawLlm += 15;
+        correlationBonuses.push({
+            rule: `AI phát hiện Phishing/Lừa đảo + Lệch tên miền người gửi (Domain Mismatch)`
+        });
+    }
+
+    // 3.12. Lạm dụng dịch vụ hợp pháp để phishing (Google Forms/Docs/SharePoint)
+    const legitimateServiceDomains = ['google.com', 'googleapis.com', 'dropbox.com', 'sharepoint.com', 'onedrive.com', 'outlook.com', 'office365.com'];
+    const senderIsLegitService = legitimateServiceDomains.some(d => testDomain.endsWith(d));
+    const hasGoogleFormsLink = urls.some(u => {
+        const urlStr = (u.url || '').toLowerCase();
+        return urlStr.includes('docs.google.com/forms') || urlStr.includes('forms.gle') || urlStr.includes('docs.google.com/document') || urlStr.includes('sharepoint.com');
+    });
+    if (senderIsLegitService && (aiVerdict === 'PHISHING' || seScore >= 70) && hasGoogleFormsLink) {
+        rawLlm += 20;
+        rawUrl += 15;
+        correlationBonuses.push({
+            rule: `Lạm dụng dịch vụ hợp pháp (${testDomain}) để phishing qua Google Forms/Docs`
+        });
+    }
+
+    // 3.13. AI Phishing mạnh + Bất thường kỹ thuật từ Header
+    if ((aiVerdict === 'PHISHING' || seScore >= 60) && anomalies.length > 0) {
+        rawLlm += 10;
+        rawHeader += 10;
+        correlationBonuses.push({
+            rule: `AI Phishing mạnh + Bất thường kỹ thuật từ Header`
+        });
+    }
+
+    // TỔNG HỢP ĐIỂM MODULE THEO MỨC TRẦN TỐI ĐA (50 - 60 ĐIỂM)
+    moduleScores.header = Math.min(30, rawHeader);
+    moduleScores.domainAge = Math.min(60, rawDomain);
+    moduleScores.llm = Math.min(50, rawLlm);
+    moduleScores.url = Math.min(50, rawUrl);
+    moduleScores.attachment = (attachments && attachments.length > 0) ? Math.min(50, rawAtt) : 0;
+    moduleScores.ioc = Math.min(50, rawIoc);
+
+    // XỬ LÝ HARD RULE: Đẩy điểm module trực tiếp gây ra vi phạm lên tối đa và ngắt mạch 100đ
+    if (hardRuleHits.length > 0) {
+        if (hardRuleHits.some(h => h.includes('PhishTank') || h.includes('URLhaus') || h.includes('IOC'))) {
+            moduleScores.ioc = 50;
+            moduleScores.url = Math.max(moduleScores.url, 35);
+        }
+        if (hardRuleHits.some(h => h.includes('Tệp đính kèm') || h.includes('Magic Bytes'))) {
+            moduleScores.attachment = 50;
+        }
+        if (hardRuleHits.some(h => h.includes('Mạo danh domain nội bộ'))) {
+            moduleScores.header = 30;
+            moduleScores.domainAge = 60;
+        }
+
+        // Đảm bảo tính trung thực: Nếu email không có file đính kèm thì điểm tệp đính kèm luôn là 0đ!
+        if (!attachments || attachments.length === 0) {
+            moduleScores.attachment = 0;
+        }
+
+        const action = isAllowlisted ? 'LOG_ALLOWLISTED' : 'DELETE_TO_TRASH';
+        const actionNameVi = isAllowlisted 
+            ? 'Người gửi Tin Cậy (Chỉ Gắn Nhãn / Giữ trong Inbox)' 
+            : 'Xóa thư độc hại (Chuyển vào Thùng rác Gmail)';
+        const playbookActions = isAllowlisted ? [] : generatePlaybookActions(email, 'MALICIOUS', { totalScore: 100, isHardRule: true, hardRuleHits });
+
+        return {
+            totalScore: 100,
+            verdict: 'MALICIOUS',
+            action: action,
+            actionNameVi: actionNameVi,
+            isHardRule: true,
+            hardRuleHits: hardRuleHits,
+            moduleScores: moduleScores,
+            correlationBonuses: correlationBonuses,
+            failSafeNotes: isAllowlisted ? ['Người gửi nằm trong Allowlist: Bỏ qua hành động tự xóa'] : [],
+            playbookActions: playbookActions,
+            evaluatedAt: new Date().toISOString()
+        };
+    }
+
+    // TỔNG ĐIỂM = Tổng điểm thực tế từ 6 module (Chuẩn hóa tối đa 100đ, không cộng điểm rời rạc)
+    let totalScore = Math.min(100, 
+        moduleScores.header + 
+        moduleScores.domainAge + 
+        moduleScores.llm + 
+        moduleScores.url + 
+        moduleScores.attachment + 
+        moduleScores.ioc
+    );
 
     // ========================================================
     // PHẦN 4: NGUYÊN TẮC AN TOÀN & FAIL-SAFE CHECKS
@@ -443,29 +698,40 @@ function evaluateEmail(email) {
         };
     }
 
-    // 4.2. Nguyên tắc LLM Guard: Không bao giờ xóa/cách ly nếu điểm CHỦ YẾU đến từ LLM
+    // 4.2. Nguyên tắc LLM Guard & Escalation khi có IOC độc hại
+    // Nếu có IOC độc hại đã xác thực trên VirusTotal/Threat Intel -> Bắt buộc điểm tối thiểu >= 65 (SUSPICIOUS)
+    if (hasMaliciousIoc && totalScore < 50) {
+        totalScore = 65;
+        correlationBonuses.push({
+            rule: 'Tự động nâng cấp mức cảnh báo (Escalation): Phát hiện IOC Độc hại đã xác thực từ Threat Intel'
+        });
+    }
+
     const technicalScore = moduleScores.header + moduleScores.domainAge + moduleScores.url + moduleScores.attachment + moduleScores.ioc;
     let safeVerdict = 'CLEAN';
     let safeAction = 'LOG_CLEAN';
     let actionNameVi = 'Lưu Log Kiểm Toán / Thư An Toàn';
 
-    if (totalScore >= 75) {
+    if (totalScore >= 70) {
         safeVerdict = 'MALICIOUS';
         safeAction = 'DELETE_TO_TRASH';
         actionNameVi = 'Xóa thư độc hại (Chuyển vào Thùng rác Gmail)';
         
         // Nếu điểm kỹ thuật = 0 mà điểm LLM cao -> hạ cấp hành động sang Suspicious
-        if (technicalScore === 0 && moduleScores.llm > 0) {
+        // NGOẠI TRỪ: Có quy tắc tương quan (đã có bằng chứng liên kết chéo) HOẶC SE score >= 70 + anomaly
+        const hasStrongCorrelation = correlationBonuses.length > 0;
+        const hasStrongAiWithEvidence = seScore >= 70 && (anomalies.length > 0 || hasGoogleFormsLink);
+        if (technicalScore === 0 && moduleScores.llm > 0 && !hasStrongCorrelation && !hasStrongAiWithEvidence) {
             safeVerdict = 'SUSPICIOUS';
             safeAction = 'MOVE_TO_SPAM';
             actionNameVi = 'Vứt thư vào thư mục Spam của Gmail (Hạ cấp vì điểm chỉ đến từ LLM)';
             failSafeNotes.push('LLM Safety Guard: Không kích hoạt Xóa thư vì không có chứng cứ kỹ thuật độc lập.');
         }
-    } else if (totalScore >= 50) {
+    } else if (totalScore >= 40) {
         safeVerdict = 'SUSPICIOUS';
         safeAction = 'MOVE_TO_SPAM';
         actionNameVi = 'Vứt thư vào thư mục Spam của Gmail';
-    } else if (totalScore >= 25) {
+    } else if (totalScore >= 20) {
         safeVerdict = 'LOW';
         safeAction = 'KEEP_INBOX';
         actionNameVi = 'Giữ trong Hộp thư đến (Inbox) — Gắn nhãn rủi ro thấp';
@@ -506,6 +772,8 @@ function evaluateEmail(email) {
         correlationBonuses,
         failSafeNotes,
         typosquatInfo,
+        brandSpoofInfo,
+        hasMaliciousIoc,
         isDomainNotFound,
         playbookActions: playbookActions,
         evaluatedAt: new Date().toISOString()

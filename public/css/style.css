@@ -62,6 +62,7 @@ body {
 .stat-box.high .num, .stat-box.malicious .num { color: #ff4757; }
 .stat-box.medium .num, .stat-box.suspicious .num { color: #ffa502; }
 .stat-box.low .num, .stat-box.clean .num { color: #2ed573; }
+.stat-box.pending .num { color: #a4b0be; }
 .stat-box.total .num { color: #00d4ff; }
 
 /* ==========================================================================
@@ -149,7 +150,7 @@ body {
 .risk-dot.MEDIUM, .risk-dot.SUSPICIOUS { background: #ffa502; box-shadow: 0 0 6px #ffa50266; }
 .risk-dot.LOW, .risk-dot.CLEAN { background: #2ed573; box-shadow: 0 0 6px #2ed57366; }
 .risk-dot.INCONCLUSIVE { background: #70a1ff; box-shadow: 0 0 6px #70a1ff66; }
-.risk-dot.none { background: #555; }
+.risk-dot.UNANALYZED, .risk-dot.PENDING, .risk-dot.none { background: #747d8c; }
 
 .email-item .info {
     flex: 1;
@@ -278,7 +279,8 @@ body {
 
 .risk-score-circle.HIGH { background: #ff475722; color: #ff4757; border: 3px solid #ff4757; }
 .risk-score-circle.MEDIUM { background: #ffa50222; color: #ffa502; border: 3px solid #ffa502; }
-.risk-score-circle.LOW { background: #2ed57322; color: #2ed573; border: 3px solid #2ed573; }
+.risk-score-circle.LOW { background: #eccc6822; color: #eccc68; border: 3px solid #eccc68; }
+.risk-score-circle.CLEAN { background: #2ed57322; color: #2ed573; border: 3px solid #2ed573; }
 
 .risk-label {
     font-size: 16px;
@@ -288,7 +290,8 @@ body {
 
 .risk-label.HIGH { color: #ff4757; }
 .risk-label.MEDIUM { color: #ffa502; }
-.risk-label.LOW { color: #2ed573; }
+.risk-label.LOW { color: #eccc68; }
+.risk-label.CLEAN { color: #2ed573; }
 
 /* Auth Badges (SPF / DKIM / DMARC) */
 .auth-grid {
@@ -324,6 +327,8 @@ body {
 .auth-badge.fail .status, .auth-badge.softfail .status { color: #ff4757; }
 .auth-badge.none { background: #ffa50212; }
 .auth-badge.none .status { color: #ffa502; }
+.auth-badge.bestguesspass { background: #2ed57312; border-color: #2ed57344; }
+.auth-badge.bestguesspass .status { color: #2ed573; font-size: 13px; }
 
 /* Domain Information */
 .domain-info {
