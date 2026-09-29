@@ -5,8 +5,6 @@ const path = require('path');
 const app = express();
 
 const { connectDB } = require('./config/db');
-const emailController = require('./controllers/emailController');
-const inboxController = require('./controllers/inboxController');
 const { runCollector } = require('./workers/emailWorker');
 
 app.use(express.json());
@@ -15,36 +13,10 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ========================
-// API Routes
+// API Routes (Định tuyến module hóa)
 // ========================
-
-// Endpoint phân tích email (tương thích ngược + hỗ trợ emailId từ DB)
-app.post('/api/analyze', emailController.analyzeEmail);
-
-// Endpoint phân tích header: SPF, DKIM, DMARC, Domain Age
-app.post('/api/analyze/header', emailController.analyzeHeader);
-
-// Endpoint phân tích nội dung & Social Engineering AI (Ollama Local)
-app.post('/api/analyze/content', emailController.analyzeContent);
-
-// Endpoint truy vết URL & Redirect Chain
-app.post('/api/analyze/urls', emailController.analyzeUrls);
-
-// Endpoint phân tích file đính kèm & Cloud Sandbox
-app.post('/api/analyze/attachments', emailController.analyzeAttachments);
-
-// Endpoint làm rõ IOC bằng Threat Intelligence đa nguồn (Cache 24h)
-app.post('/api/analyze/ioc', emailController.analyzeIOC);
-
-// Inbox API — Quản lý email đã thu thập
-app.get('/api/inbox', inboxController.listEmails);
-app.get('/api/inbox/:id', inboxController.getEmailDetail);
-app.post('/api/inbox/collect', inboxController.triggerCollect);
-app.get('/api/inbox/:id/verify', inboxController.verifyIntegrity);
-
-// Bước 8: Phản ứng (Response) & Xuất Báo Cáo
-app.post('/api/response/block', emailController.executeBlockResponse);
-app.get('/api/reports/:id/html', emailController.exportReportHTML);
+const apiRoutes = require('./routes');
+app.use('/api', apiRoutes);
 
 // ========================
 // Khởi động Server
